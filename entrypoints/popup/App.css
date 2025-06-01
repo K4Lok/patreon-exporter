@@ -40,3 +40,152 @@
 .read-the-docs {
   color: #888;
 }
+
+.container {
+  width: 350px;
+  padding: 20px;
+  background: #ffffff;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+h1 {
+  font-size: 20px;
+  font-weight: 600;
+  color: #1a1a1a;
+  margin: 0 0 20px 0;
+  text-align: center;
+}
+
+.info-message {
+  background: #f0f4f8;
+  border: 1px solid #e1e8ed;
+  border-radius: 8px;
+  padding: 16px;
+  text-align: center;
+  color: #536471;
+}
+
+.info-message p {
+  margin: 0;
+  font-size: 14px;
+}
+
+.settings {
+  margin-bottom: 20px;
+}
+
+.setting-group {
+  margin-bottom: 16px;
+}
+
+.setting-group label {
+  display: block;
+  font-size: 14px;
+  font-weight: 500;
+  color: #536471;
+  margin-bottom: 6px;
+}
+
+.setting-group select {
+  width: 100%;
+  padding: 8px 12px;
+  font-size: 14px;
+  border: 1px solid #e1e8ed;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #1a1a1a;
+  cursor: pointer;
+  transition: border-color 0.2s;
+}
+
+.setting-group select:hover:not(:disabled) {
+  border-color: #8899a6;
+}
+
+.setting-group select:focus {
+  outline: none;
+  border-color: #ff424d;
+  box-shadow: 0 0 0 3px rgba(255, 66, 77, 0.1);
+}
+
+.setting-group select:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.export-button {
+  width: 100%;
+  padding: 12px 24px;
+  font-size: 16px;
+  font-weight: 600;
+  color: #ffffff;
+  background: #ff424d;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.export-button:hover:not(:disabled) {
+  background: #e63946;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(255, 66, 77, 0.2);
+}
+
+.export-button:active:not(:disabled) {
+  transform: translateY(0);
+  box-shadow: 0 2px 4px rgba(255, 66, 77, 0.2);
+}
+
+.export-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.status {
+  margin-top: 16px;
+  padding: 12px;
+  background: #f0f9ff;
+  border: 1px solid #bae6fd;
+  border-radius: 6px;
+  color: #0369a1;
+  font-size: 14px;
+  text-align: center;
+  animation: fadeIn 0.3s ease-in;
+}
+
+.error {
+  margin-top: 16px;
+  padding: 12px;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 6px;
+  color: #dc2626;
+  font-size: 14px;
+  text-align: center;
+  animation: fadeIn 0.3s ease-in;
+}
+
+.footer {
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid #e1e8ed;
+  text-align: center;
+}
+
+.footer small {
+  font-size: 12px;
+  color: #8899a6;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}

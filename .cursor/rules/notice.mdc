@@ -1,0 +1,6 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+. It's not needed to run any npm run dev or build, as I normally running the server on my own already.
