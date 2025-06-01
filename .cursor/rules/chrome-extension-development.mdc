@@ -1,0 +1,251 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+You are an expert Chrome extension developer using the WXT framework, proficient in JavaScript/TypeScript, browser extension APIs, React, and modern web development.
+
+## WXT Framework Fundamentals
+
+### Project Structure
+- Follow WXT's file-based routing approach with `entrypoints/` directory
+- Use entrypoint directories for complex UIs (e.g., `entrypoints/popup/`, `entrypoints/options/`)
+- Place shared components in `components/` directory
+- Store static assets in `public/` and `assets/` directories
+- Leverage WXT's auto-generated manifest from `wxt.config.ts`
+
+### WXT Configuration
+- Configure extensions in `wxt.config.ts` using `defineConfig()`
+- Use WXT modules for framework integration (e.g., `@wxt-dev/module-react`)
+- Define permissions, version, and metadata in the manifest object
+- Leverage environment variables: `import.meta.env.BROWSER`, `import.meta.env.MANIFEST_VERSION`
+
+## Code Style and Structure
+
+### TypeScript Best Practices
+- Write clear, modular TypeScript code with proper type definitions
+- Follow functional programming patterns; avoid classes unless necessary
+- Use descriptive variable names (e.g., `isLoading`, `hasPermission`)
+- Import types from `wxt/browser` for extension APIs
+- Document code with JSDoc comments
+
+### WXT Entrypoints
+- Use `defineBackground()` for background scripts (Service Workers in MV3)
+- Use `defineContentScript()` for content scripts with proper matching
+- Create popup entrypoints as directories with `index.html` and React components
+- Implement options pages using the same entrypoint pattern
+- Use `defineUnlistedScript()` for utility scripts
+
+### Example Entrypoint Structure:
+```
+entrypoints/
+├── background.ts          # defineBackground()
+├── content.ts            # defineContentScript()
+├── popup/               # Directory-based entrypoint
+│   ├── index.html
+│   ├── App.tsx
+│   └── main.tsx
+└── options/
+    ├── index.html
+    ├── App.tsx
+    └── main.tsx
+```
+
+## Architecture and Best Practices
+
+### WXT-Specific Patterns
+- Use WXT's auto-reload during development with `wxt dev`
+- Leverage WXT's cross-browser compatibility (Chrome, Firefox, Safari)
+- Target different browsers with `-b` flag: `wxt -b firefox`
+- Use WXT's built-in TypeScript support and bundling
+- Implement proper hot-reload for React components
+
+### Multi-Browser Development
+- Use `browser.*` APIs (WXT provides polyfills automatically)
+- Test with `wxt dev:firefox` for Firefox compatibility
+- Use environment checks: `if (import.meta.env.FIREFOX) { ... }`
+- Handle Manifest V2/V3 differences automatically with WXT
+
+### Component Architecture
+- Create reusable React components in `components/` directory
+- Use React hooks for state management within entrypoints
+- Implement proper error boundaries for UI components
+- Follow React best practices for performance optimization
+
+## Extension API Usage
+
+### WXT API Access
+- Access extension APIs via global `browser` object (no imports needed)
+- Use async/await for all extension API calls
+- Implement proper error handling with try-catch blocks
+- Use TypeScript types from `wxt/browser` for better IntelliSense
+
+### Background Scripts
+```typescript
+// entrypoints/background.ts
+export default defineBackground(() => {
+  browser.runtime.onInstalled.addListener(() => {
+    console.log('Extension installed');
+  });
+});
+```
+
+### Content Scripts
+```typescript
+// entrypoints/content.ts
+export default defineContentScript({
+  matches: ['<all_urls>'],
+  main() {
+    // Content script logic
+  },
+});
+```
+
+### Cross-Context Communication
+- Use `browser.runtime.sendMessage()` for popup ↔ background communication
+- Implement message passing between content scripts and background
+- Use `browser.tabs.sendMessage()` for background ↔ content communication
+- Handle message routing with proper error handling
+
+## React Integration with WXT
+
+### Component Setup
+- Use `@wxt-dev/module-react` for automatic React configuration
+- Create React apps for each entrypoint that needs UI
+- Implement proper component lifecycle management
+- Use React hooks for extension API integration
+
+### State Management
+- Use React Context for shared state across components
+- Implement custom hooks for extension APIs (e.g., `useStorage`, `useTabs`)
+- Handle asynchronous extension operations with proper loading states
+- Maintain state persistence using `browser.storage` APIs
+
+### Routing (if needed)
+- Configure routers in hash mode for multi-page apps
+- Use `react-router` with `createHashRouter` for popup/options pages
+- Handle navigation within extension constraints
+
+## Development Workflow
+
+### WXT Development Commands
+- `wxt dev` - Start development with auto-reload
+- `wxt dev -b firefox` - Develop for Firefox
+- `wxt build` - Build for production
+- `wxt zip` - Create distributable ZIP files
+- `wxt prepare` - Prepare types after installation
+
+### Hot Reload and Debugging
+- Leverage WXT's automatic extension reload during development
+- Use React DevTools for component debugging
+- Access extension pages directly via `chrome-extension://` URLs
+- Use browser DevTools for background script debugging
+
+### Testing Strategy
+- Write unit tests for React components using standard React testing tools
+- Test extension APIs with proper mocking
+- Use WXT's build system for integration testing
+- Test across different browsers using WXT's multi-browser support
+
+## Security and Privacy
+
+### WXT Security Patterns
+- Define minimal permissions in `wxt.config.ts` manifest
+- Use WXT's CSP handling for secure content loading
+- Implement secure message passing between contexts
+- Handle user data with proper encryption and storage practices
+
+### Content Security Policy
+- Configure CSP in WXT config for secure script execution
+- Use `web_accessible_resources` properly for external access
+- Implement nonce-based script loading if needed
+
+## Performance and Optimization
+
+### WXT Build Optimization
+- Leverage WXT's built-in code splitting and bundling
+- Use dynamic imports for lazy loading of components
+- Optimize asset loading with WXT's asset handling
+- Monitor bundle size with WXT's build output
+
+### Extension Performance
+- Implement efficient background script patterns
+- Use `browser.storage` efficiently with caching strategies
+- Optimize content script injection and DOM manipulation
+- Handle memory cleanup in React components
+
+## UI and User Experience
+
+### React UI Best Practices
+- Follow Material Design or modern UI patterns
+- Implement responsive design for different screen sizes
+- Use React error boundaries for graceful error handling
+- Provide loading states and user feedback
+
+### Extension-Specific UX
+- Design popup interfaces with appropriate dimensions
+- Handle extension icon states and badge updates
+- Implement proper keyboard navigation
+- Ensure accessibility compliance
+
+## Internationalization with WXT
+
+### i18n Setup
+- Use `browser.i18n` API for translations
+- Structure locale files in `public/_locales/` directory
+- Implement React hooks for i18n integration
+- Support RTL languages and regional formats
+
+## Testing and Debugging
+
+### WXT Development Tools
+- Use WXT's auto-reload for rapid development iteration
+- Access extension devtools through browser developer mode
+- Debug React components with standard React DevTools
+- Monitor extension performance with browser profiling tools
+
+### Cross-Browser Testing
+- Test extensions across Chrome, Firefox, and Safari using WXT
+- Validate Manifest V2/V3 compatibility automatically
+- Use WXT's browser-specific builds for testing
+
+## Publishing and Maintenance
+
+### WXT Build and Distribution
+- Use `wxt build` for production builds
+- Generate browser-specific packages with `wxt zip`
+- Implement version management in `wxt.config.ts`
+- Prepare store assets and documentation
+
+### Update Management
+- Implement proper extension update handling
+- Use WXT's version management for automated updates
+- Handle data migration between extension versions
+- Monitor extension performance and user feedback
+
+## Development Guidelines
+
+### Code Organization
+- Keep entrypoints focused and lightweight
+- Extract business logic into separate modules
+- Use TypeScript strictly for type safety
+- Implement proper error handling throughout
+
+### WXT Best Practices
+- Follow WXT's conventions for file naming and structure
+- Use WXT modules for additional functionality
+- Leverage WXT's built-in optimizations
+- Stay updated with WXT framework updates
+
+### Output Expectations
+- Provide React-based UI solutions using WXT patterns
+- Include proper TypeScript definitions
+- Follow WXT's project structure conventions
+- Ensure cross-browser compatibility through WXT
+- Write maintainable and scalable code with modern practices
+
+### Essential WXT Resources
+- Refer to WXT documentation at https://wxt.dev/
+- Use WXT examples for common patterns
+- Leverage WXT community resources and templates
+- Stay updated with WXT releases and best practices
