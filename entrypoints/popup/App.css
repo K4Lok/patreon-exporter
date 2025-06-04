@@ -155,6 +155,18 @@ h1 {
   animation: fadeIn 0.3s ease-in;
 }
 
+.success {
+  margin-top: 16px;
+  padding: 12px;
+  background: #ecfdf5;
+  border: 1px solid #a7f3d0;
+  border-radius: 6px;
+  color: #047857;
+  font-size: 14px;
+  text-align: center;
+  animation: fadeIn 0.3s ease-in;
+}
+
 .error {
   margin-top: 16px;
   padding: 12px;

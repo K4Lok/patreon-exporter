@@ -10,6 +10,7 @@ function App() {
   const [isExporting, setIsExporting] = useState(false);
   const [status, setStatus] = useState<string>('');
   const [error, setError] = useState<string>('');
+  const [isSuccess, setIsSuccess] = useState(false);
   const [isPatreonPage, setIsPatreonPage] = useState(false);
   const [settings, setSettings] = useState<ExportSettings>({
     pageSize: 'a4',
@@ -40,6 +41,7 @@ function App() {
     setIsExporting(true);
     setError('');
     setStatus('Preparing export...');
+    setIsSuccess(false);
 
     try {
       // Get current tab
@@ -74,6 +76,7 @@ function App() {
 
         if (downloadResponse && downloadResponse.success) {
           setStatus('PDF exported successfully!');
+          setIsSuccess(true);
           setTimeout(() => window.close(), 2000);
         } else {
           throw new Error(downloadResponse?.error || 'Download failed');
@@ -85,6 +88,7 @@ function App() {
       console.error('Export error:', err);
       setError(err instanceof Error ? err.message : 'Export failed');
       setStatus('');
+      setIsSuccess(false);
     } finally {
       setIsExporting(false);
     }
@@ -150,11 +154,11 @@ function App() {
         {isExporting ? 'Exporting...' : 'Export to PDF'}
       </button>
 
-      {status && <div className="status">{status}</div>}
+      {status && <div className={isSuccess ? "success" : "status"}>{status}</div>}
       {error && <div className="error">{error}</div>}
 
       <div className="footer">
-        <small>Export Patreon posts for personal archival use only</small>
+        <small>Export Patreon posts with page splitting for better text selection</small>
       </div>
     </div>
   );

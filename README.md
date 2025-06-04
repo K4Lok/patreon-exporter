@@ -5,8 +5,9 @@ Export Patreon posts to clean PDFs for offline reading with a single click.
 ## Features
 
 - **One-click export**: Convert any Patreon post to PDF instantly
+- **Continuous PDF pages**: Creates single long pages without splitting images across page breaks
 - **Clean formatting**: Removes all navigation, comments, and CTAs - just the content
-- **Customizable settings**: Choose between A4/Letter page sizes and image quality levels
+- **Customizable settings**: Choose between A4/Letter page widths and image quality levels
 - **Privacy-focused**: All processing happens locally in your browser - no servers, no tracking
 - **Cross-browser support**: Works on Chrome, Edge, Firefox, and other Chromium-based browsers
 
@@ -52,20 +53,22 @@ pnpm zip
 1. Navigate to any Patreon post you want to export
 2. Click the Patreon Exporter icon in your browser toolbar
 3. Configure your export settings (optional):
-   - **Page Size**: A4 or Letter
+   - **Page Width**: A4 or Letter
    - **Image Quality**: High, Medium, or Low
-4. Click "Export to PDF"
+4. Click "Export as Continuous PDF"
 5. Choose where to save your PDF
 
 ## Settings
 
-- **Page Size**: Choose between A4 (210 × 297mm) or Letter (8.5 × 11 in)
+- **Page Width**: Choose between A4 or Letter width (height adjusts automatically to content)
 - **Image Quality**: 
   - High: Best quality, larger file size
   - Medium: Balanced quality and file size
   - Low: Smaller files, reduced image quality
 
 Settings are automatically saved and remembered for future exports.
+
+**Note**: The new continuous PDF format ensures that images and content are never split across page breaks, creating a seamless reading experience.
 
 ## Technical Stack
 

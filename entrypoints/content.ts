@@ -10,6 +10,9 @@ export default defineContentScript({
   matches: ['https://www.patreon.com/*'],
   async main() {
 
+    // Add a "To PDF" button to the page
+    addToPdfButton();
+
     // Listen for messages from popup
     browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (message.cmd === 'export') {
@@ -35,6 +38,122 @@ export default defineContentScript({
       sendResponse({ success: false, error: 'Unknown command' });
       return false;
     });
+
+    // Function to add a "To PDF" button to the page
+    function addToPdfButton() {
+      // Only add the button if we're on a post page
+      if (!isPostPage()) return;
+
+      // Create the button element
+      const button = document.createElement('button');
+      button.textContent = 'To PDF';
+      button.id = 'patreon-exporter-button';
+      
+      // Style the button
+      button.style.cssText = `
+        position: fixed;
+        bottom: 20px;
+        right: 20px;
+        padding: 10px 15px;
+        font-size: 14px;
+        font-weight: 600;
+        color: white;
+        background-color: #ff424d;
+        border: none;
+        border-radius: 8px;
+        cursor: pointer;
+        z-index: 9999;
+        box-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
+        transition: all 0.2s ease;
+      `;
+      
+      // Add hover effect
+      button.addEventListener('mouseover', () => {
+        button.style.backgroundColor = '#e63946';
+        button.style.transform = 'translateY(-2px)';
+        button.style.boxShadow = '0 4px 12px rgba(255, 66, 77, 0.3)';
+      });
+      
+      button.addEventListener('mouseout', () => {
+        button.style.backgroundColor = '#ff424d';
+        button.style.transform = 'translateY(0)';
+        button.style.boxShadow = '0 2px 10px rgba(0, 0, 0, 0.2)';
+      });
+      
+      // Add click handler to export the post
+      button.addEventListener('click', async () => {
+        // Change button state to indicate processing
+        button.disabled = true;
+        button.textContent = 'Exporting...';
+        button.style.backgroundColor = '#cccccc';
+        
+        try {
+          // Get settings from storage
+          const settings = await browser.storage.sync.get(['pageSize', 'imageQuality']);
+          const exportSettings = {
+            pageSize: settings.pageSize || 'a4',
+            imageQuality: settings.imageQuality || 'high'
+          };
+          
+          // Export the post
+          const result = await exportPost(exportSettings);
+          
+          // Send to background script for download
+          await browser.runtime.sendMessage({
+            cmd: 'download',
+            blobUrl: result.blobUrl,
+            filename: result.filename
+          });
+          
+          // Show success state briefly
+          button.textContent = 'Success!';
+          button.style.backgroundColor = '#10b981';
+          
+          // Reset button after a delay
+          setTimeout(() => {
+            button.disabled = false;
+            button.textContent = 'To PDF';
+            button.style.backgroundColor = '#ff424d';
+          }, 2000);
+          
+        } catch (error) {
+          console.error('Export failed:', error);
+          
+          // Show error state
+          button.textContent = 'Failed!';
+          button.style.backgroundColor = '#ef4444';
+          
+          // Reset button after a delay
+          setTimeout(() => {
+            button.disabled = false;
+            button.textContent = 'To PDF';
+            button.style.backgroundColor = '#ff424d';
+          }, 2000);
+        }
+      });
+      
+      // Add the button to the page
+      document.body.appendChild(button);
+    }
+    
+    // Check if we're on a post page
+    function isPostPage(): boolean {
+      // Check for post-specific elements
+      const postSelectors = [
+        'div[data-tag="post-card"]',
+        'article[data-tag="post-card"]',
+        // Add more specific selectors if needed
+      ];
+      
+      for (const selector of postSelectors) {
+        if (document.querySelector(selector)) {
+          return true;
+        }
+      }
+      
+      // Check URL pattern as fallback
+      return window.location.pathname.includes('/posts/');
+    }
 
     async function exportPost(settings?: ExportSettings): Promise<{ blobUrl: string; filename: string }> {
       
@@ -373,6 +492,7 @@ export default defineContentScript({
         // Add proper spacing for text elements
         if (['P', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'BLOCKQUOTE', 'DIV'].includes(htmlEl.tagName)) {
           htmlEl.style.marginBottom = '16px';
+          // Add page break restrictions to avoid content being cut across pages
           htmlEl.style.pageBreakInside = 'avoid';
         }
         
@@ -380,6 +500,7 @@ export default defineContentScript({
         if (htmlEl.tagName === 'DIV' && htmlEl.style.background?.includes('gradient')) {
           htmlEl.style.marginTop = '20px';
           htmlEl.style.marginBottom = '20px';
+          // Make sure images don't get split across pages
           htmlEl.style.pageBreakInside = 'avoid';
         }
       });
@@ -408,8 +529,7 @@ export default defineContentScript({
           },
         });
 
-
-        // Create PDF with improved pagination
+        // Create PDF with pagination
         const pdf = new jsPDF({
           orientation: 'portrait',
           unit: 'px',
@@ -426,7 +546,6 @@ export default defineContentScript({
         const effectivePageHeight = pdfHeight - pageOverlap;
         const totalPages = Math.ceil(imgHeight / effectivePageHeight);
         
-
         for (let pageIndex = 0; pageIndex < totalPages; pageIndex++) {
           if (pageIndex > 0) {
             pdf.addPage();
@@ -466,7 +585,6 @@ export default defineContentScript({
           const actualPageHeight = Math.min(pdfHeight, (pageCanvas.height * imgWidth) / canvas.width);
           
           pdf.addImage(pageData, 'JPEG', 0, 0, imgWidth, actualPageHeight);
-          
         }
 
         return pdf.output('blob');

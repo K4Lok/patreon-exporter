@@ -30,5 +30,5 @@ export default defineConfig({
       "128": "icon/128.png"
     }
   },
-  targetBrowsers: ['chrome', 'edge', 'firefox']
+  targetBrowsers: ['chrome', 'edge', 'firefox'],
 });
