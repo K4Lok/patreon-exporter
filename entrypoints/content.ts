@@ -2,8 +2,10 @@ import jsPDF from 'jspdf';
 import html2canvas from 'html2canvas';
 
 interface ExportSettings {
-  pageSize?: 'a4' | 'letter';
+  pageSize?: 'letter';
   imageQuality?: 'high' | 'medium' | 'low';
+  includeComments?: boolean;
+  showDownloadDialog?: boolean;
 }
 
 export default defineContentScript({
@@ -53,7 +55,7 @@ export default defineContentScript({
       button.style.backgroundColor = '#ff424d';
     }
 
-    async function downloadFileDirectly(blobUrl: string, filename: string) {
+    async function downloadFileDirectly(blobUrl: string, filename: string, showDialog: boolean = false) {
       try {
         // Method 1: Try using Chrome downloads API through background script
         if (typeof browser !== 'undefined' && browser.runtime) {
@@ -61,7 +63,8 @@ export default defineContentScript({
             await browser.runtime.sendMessage({
               cmd: 'download',
               blobUrl: blobUrl,
-              filename: filename
+              filename: filename,
+              showDialog: showDialog
             });
             console.log('Download initiated via background script');
             return;
@@ -107,7 +110,12 @@ export default defineContentScript({
     }
 
     async function exportPostWithStatus(settings: ExportSettings, button: HTMLButtonElement): Promise<{ blobUrl: string; filename: string }> {
-      updateButtonStatus(button, 'Expanding comments...', '#f59e0b');
+      // Only expand comments if the setting is enabled
+      if (settings.includeComments !== false) {
+        updateButtonStatus(button, 'Expanding comments...', '#f59e0b');
+      } else {
+        updateButtonStatus(button, 'Processing content...', '#8b5cf6');
+      }
 
       // Find the main post content
       const postContent = findPostContent();
@@ -118,7 +126,7 @@ export default defineContentScript({
       updateButtonStatus(button, 'Expanding comments...', '#8b5cf6');
 
       // Clone and clean the content
-      const cleanedContent = await cleanContent(postContent);
+      const cleanedContent = await cleanContent(postContent, settings.includeComments !== false);
 
       // Get post title for filename (no date needed)
       const postTitle = getPostTitle();
@@ -194,18 +202,20 @@ export default defineContentScript({
 
         try {
           // Get settings from storage
-          const settings = await browser.storage.sync.get(['pageSize', 'imageQuality']);
+          const settings = await browser.storage.sync.get(['pageSize', 'imageQuality', 'includeComments', 'showDownloadDialog']);
           const exportSettings = {
-            pageSize: settings.pageSize || 'a4',
-            imageQuality: settings.imageQuality || 'high'
+            pageSize: settings.pageSize || 'letter',
+            imageQuality: settings.imageQuality || 'high',
+            includeComments: settings.includeComments !== undefined ? settings.includeComments : true,
+            showDownloadDialog: settings.showDownloadDialog !== undefined ? settings.showDownloadDialog : false
           };
 
           // Export the post with status updates
           const result = await exportPostWithStatus(exportSettings, button);
 
-          // Download directly without user interaction
+          // Download based on user preference
           updateButtonStatus(button, 'Downloading...', '#4f46e5');
-          await downloadFileDirectly(result.blobUrl, result.filename);
+          await downloadFileDirectly(result.blobUrl, result.filename, exportSettings.showDownloadDialog);
 
           // Show success state briefly
           updateButtonStatus(button, 'Success!', '#10b981');
@@ -272,7 +282,7 @@ export default defineContentScript({
       return null;
     }
 
-    async function cleanContent(originalContent: Element): Promise<HTMLElement> {
+    async function cleanContent(originalContent: Element, includeComments: boolean = true): Promise<HTMLElement> {
       
       // Create a hidden container for cleaned content
       const container = document.createElement('div');
@@ -291,9 +301,14 @@ export default defineContentScript({
       // Clone the content
       const clonedContent = originalContent.cloneNode(true) as HTMLElement;
 
-      // Extract and process comments before removing them
-      const commentsSection = await extractAndProcessComments(clonedContent);
-      console.log('Comments section created:', commentsSection ? 'Yes' : 'No');
+      // Extract and process comments before removing them (only if enabled)
+      let commentsSection = null;
+      if (includeComments) {
+        commentsSection = await extractAndProcessComments(clonedContent);
+        console.log('Comments section created:', commentsSection ? 'Yes' : 'No');
+      } else {
+        console.log('Comments disabled, skipping comment extraction');
+      }
 
       // Remove unwanted elements using correct Patreon selectors
       const selectorsToRemove = [
@@ -860,16 +875,10 @@ export default defineContentScript({
     }
 
     async function generatePDF(content: HTMLElement, settings?: ExportSettings): Promise<Blob> {
-      const pageSize = settings?.pageSize || 'a4';
       const imageQuality = settings?.imageQuality || 'high';
 
-      // Page dimensions based on settings with proper margins
-      const pageDimensions: Record<'a4' | 'letter', { width: number; height: number }> = {
-        a4: { width: 794, height: 1123 },
-        letter: { width: 816, height: 1056 }
-      };
-
-      const dimensions = pageDimensions[pageSize];
+      // Page dimensions for Letter size with proper margins
+      const dimensions = { width: 816, height: 1056 };
       const marginTop = 60;
       const marginBottom = 60;
       const marginLeft = 50;
@@ -955,7 +964,7 @@ export default defineContentScript({
         console.log('Canvas created successfully, size:', canvas.width, 'x', canvas.height);
 
         // Create PDF with intelligent pagination
-        return await createPDFWithSimplePagination(canvas, quality, pageSize);
+        return await createPDFWithSimplePagination(canvas, quality);
       } catch (error) {
         console.error('PDF generation failed with detailed error:', error);
         console.error('Error stack:', error instanceof Error ? error.stack : 'No stack trace');
@@ -965,8 +974,7 @@ export default defineContentScript({
 
     async function createPDFWithSimplePagination(
       canvas: HTMLCanvasElement,
-      quality: { scale: number; jpegQuality: number },
-      pageSize: 'a4' | 'letter'
+      quality: { scale: number; jpegQuality: number }
     ): Promise<Blob> {
       console.log('Creating PDF with simple pagination...');
 
@@ -974,7 +982,7 @@ export default defineContentScript({
       const pdf = new jsPDF({
         orientation: 'portrait',
         unit: 'px',
-        format: pageSize === 'letter' ? 'letter' : 'a4'
+        format: 'letter'
       });
 
       const pdfWidth = pdf.internal.pageSize.getWidth();

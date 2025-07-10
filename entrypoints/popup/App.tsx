@@ -2,8 +2,10 @@ import { useState, useEffect } from 'react';
 import './App.css';
 
 interface ExportSettings {
-  pageSize: 'a4' | 'letter';
+  pageSize: 'letter';
   imageQuality: 'high' | 'medium' | 'low';
+  includeComments: boolean;
+  showDownloadDialog: boolean;
 }
 
 function App() {
@@ -13,8 +15,10 @@ function App() {
   const [isSuccess, setIsSuccess] = useState(false);
   const [isPatreonPage, setIsPatreonPage] = useState(false);
   const [settings, setSettings] = useState<ExportSettings>({
-    pageSize: 'a4',
-    imageQuality: 'high'
+    pageSize: 'letter',
+    imageQuality: 'high',
+    includeComments: true,
+    showDownloadDialog: false
   });
 
   useEffect(() => {
@@ -27,13 +31,13 @@ function App() {
     });
 
     // Load saved settings
-    browser.storage.sync.get(['pageSize', 'imageQuality']).then(result => {
-      if (result.pageSize || result.imageQuality) {
-        setSettings({
-          pageSize: result.pageSize || 'a4',
-          imageQuality: result.imageQuality || 'high'
-        });
-      }
+    browser.storage.sync.get(['pageSize', 'imageQuality', 'includeComments', 'showDownloadDialog']).then(result => {
+      setSettings({
+        pageSize: result.pageSize || 'letter',
+        imageQuality: result.imageQuality || 'high',
+        includeComments: result.includeComments !== undefined ? result.includeComments : true,
+        showDownloadDialog: result.showDownloadDialog !== undefined ? result.showDownloadDialog : false
+      });
     });
   }, []);
 
@@ -95,11 +99,17 @@ function App() {
   };
 
   const handleSettingChange = async (key: keyof ExportSettings, value: string) => {
-    const newSettings = { ...settings, [key]: value };
+    // Convert string values to appropriate types
+    let actualValue: any = value;
+    if (key === 'includeComments' || key === 'showDownloadDialog') {
+      actualValue = value === 'true';
+    }
+
+    const newSettings = { ...settings, [key]: actualValue };
     setSettings(newSettings);
-    
+
     // Save to storage
-    await browser.storage.sync.set({ [key]: value });
+    await browser.storage.sync.set({ [key]: actualValue });
   };
 
   if (!isPatreonPage) {
@@ -119,21 +129,8 @@ function App() {
       
       <div className="settings">
         <div className="setting-group">
-          <label htmlFor="pageSize">Page Size:</label>
-          <select 
-            id="pageSize"
-            value={settings.pageSize}
-            onChange={(e) => handleSettingChange('pageSize', e.target.value)}
-            disabled={isExporting}
-          >
-            <option value="a4">A4</option>
-            <option value="letter">Letter</option>
-          </select>
-        </div>
-
-        <div className="setting-group">
           <label htmlFor="imageQuality">Image Quality:</label>
-          <select 
+          <select
             id="imageQuality"
             value={settings.imageQuality}
             onChange={(e) => handleSettingChange('imageQuality', e.target.value)}
@@ -143,6 +140,32 @@ function App() {
             <option value="medium">Medium</option>
             <option value="low">Low</option>
           </select>
+        </div>
+
+        <div className="setting-group">
+          <label htmlFor="includeComments">
+            <input
+              type="checkbox"
+              id="includeComments"
+              checked={settings.includeComments}
+              onChange={(e) => handleSettingChange('includeComments', e.target.checked.toString())}
+              disabled={isExporting}
+            />
+            Include Comments
+          </label>
+        </div>
+
+        <div className="setting-group">
+          <label htmlFor="showDownloadDialog">
+            <input
+              type="checkbox"
+              id="showDownloadDialog"
+              checked={settings.showDownloadDialog}
+              onChange={(e) => handleSettingChange('showDownloadDialog', e.target.checked.toString())}
+              disabled={isExporting}
+            />
+            Show Download Dialog
+          </label>
         </div>
       </div>
 

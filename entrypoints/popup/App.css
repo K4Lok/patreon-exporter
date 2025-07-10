@@ -113,6 +113,26 @@ h1 {
   cursor: not-allowed;
 }
 
+/* Checkbox styling */
+.setting-group label input[type="checkbox"] {
+  margin-right: 8px;
+  margin-bottom: 0;
+  transform: scale(1.1);
+  accent-color: #ff424d;
+}
+
+.setting-group label:has(input[type="checkbox"]) {
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  margin-bottom: 0;
+  padding: 8px 0;
+}
+
+.setting-group label:has(input[type="checkbox"]):hover {
+  color: #1a1a1a;
+}
+
 .export-button {
   width: 100%;
   padding: 12px 24px;
