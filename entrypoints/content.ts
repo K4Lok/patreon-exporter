@@ -16,28 +16,134 @@ export default defineContentScript({
     // Listen for messages from popup
     browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (message.cmd === 'export') {
-        
-        // Handle async export
-        exportPost(message.settings)
-          .then(result => {
+
+        // Handle async export - create a dummy button for status (popup export)
+        const dummyButton = document.createElement('button') as HTMLButtonElement;
+
+        exportPostWithStatus(message.settings, dummyButton)
+          .then((result: { blobUrl: string; filename: string }) => {
             sendResponse({ success: true, data: result });
           })
-          .catch(error => {
+          .catch((error: Error) => {
             console.error('Export failed:', error);
-            sendResponse({ 
-              success: false, 
-              error: error instanceof Error ? error.message : String(error) 
+            sendResponse({
+              success: false,
+              error: error instanceof Error ? error.message : String(error)
             });
           });
-        
+
         // Return true to indicate we'll send response asynchronously
         return true;
       }
-      
+
       // Send immediate response for unknown commands
       sendResponse({ success: false, error: 'Unknown command' });
       return false;
     });
+
+    // Helper functions for button status updates
+    function updateButtonStatus(button: HTMLButtonElement, text: string, color: string) {
+      button.textContent = text;
+      button.style.backgroundColor = color;
+    }
+
+    function resetButton(button: HTMLButtonElement) {
+      button.disabled = false;
+      button.textContent = 'To PDF';
+      button.style.backgroundColor = '#ff424d';
+    }
+
+    async function downloadFileDirectly(blobUrl: string, filename: string) {
+      try {
+        // Method 1: Try using Chrome downloads API through background script
+        if (typeof browser !== 'undefined' && browser.runtime) {
+          try {
+            await browser.runtime.sendMessage({
+              cmd: 'download',
+              blobUrl: blobUrl,
+              filename: filename
+            });
+            console.log('Download initiated via background script');
+            return;
+          } catch (error) {
+            console.log('Background download failed, trying direct method:', error);
+          }
+        }
+
+        // Method 2: Direct download with forced click
+        const link = document.createElement('a');
+        link.href = blobUrl;
+        link.download = filename;
+        link.style.display = 'none';
+
+        // Add to DOM
+        document.body.appendChild(link);
+
+        // Force click with multiple attempts
+        link.click();
+
+        // Try programmatic click if first doesn't work
+        setTimeout(() => {
+          const clickEvent = new MouseEvent('click', {
+            view: window,
+            bubbles: true,
+            cancelable: true
+          });
+          link.dispatchEvent(clickEvent);
+        }, 100);
+
+        // Clean up
+        setTimeout(() => {
+          document.body.removeChild(link);
+          URL.revokeObjectURL(blobUrl);
+        }, 1000);
+
+        console.log('Download initiated via direct link');
+      } catch (error) {
+        console.error('Download failed:', error);
+        // Fallback: show the blob URL for manual download
+        window.open(blobUrl, '_blank');
+      }
+    }
+
+    async function exportPostWithStatus(settings: ExportSettings, button: HTMLButtonElement): Promise<{ blobUrl: string; filename: string }> {
+      updateButtonStatus(button, 'Expanding comments...', '#f59e0b');
+
+      // Find the main post content
+      const postContent = findPostContent();
+      if (!postContent) {
+        throw new Error('Could not find post content on this page');
+      }
+
+      updateButtonStatus(button, 'Expanding comments...', '#8b5cf6');
+
+      // Clone and clean the content
+      const cleanedContent = await cleanContent(postContent);
+
+      // Get post title for filename (no date needed)
+      const postTitle = getPostTitle();
+      const sanitizedTitle = sanitizeFilename(postTitle);
+      const filename = `${sanitizedTitle}.pdf`;
+
+      console.log('Generated filename:', filename);
+
+      try {
+        updateButtonStatus(button, 'Generating PDF...', '#06b6d4');
+
+        // Generate PDF
+        const pdfBlob = await generatePDF(cleanedContent, settings);
+
+        const blobUrl = URL.createObjectURL(pdfBlob);
+
+        return { blobUrl, filename };
+      } catch (error) {
+        console.error('PDF generation failed:', error);
+        throw error;
+      } finally {
+        // Clean up
+        cleanedContent.remove();
+      }
+    }
 
     // Function to add a "To PDF" button to the page
     function addToPdfButton() {
@@ -84,9 +190,8 @@ export default defineContentScript({
       button.addEventListener('click', async () => {
         // Change button state to indicate processing
         button.disabled = true;
-        button.textContent = 'Exporting...';
-        button.style.backgroundColor = '#cccccc';
-        
+        updateButtonStatus(button, 'Preparing...', '#cccccc');
+
         try {
           // Get settings from storage
           const settings = await browser.storage.sync.get(['pageSize', 'imageQuality']);
@@ -94,40 +199,31 @@ export default defineContentScript({
             pageSize: settings.pageSize || 'a4',
             imageQuality: settings.imageQuality || 'high'
           };
-          
-          // Export the post
-          const result = await exportPost(exportSettings);
-          
-          // Send to background script for download
-          await browser.runtime.sendMessage({
-            cmd: 'download',
-            blobUrl: result.blobUrl,
-            filename: result.filename
-          });
-          
+
+          // Export the post with status updates
+          const result = await exportPostWithStatus(exportSettings, button);
+
+          // Download directly without user interaction
+          updateButtonStatus(button, 'Downloading...', '#4f46e5');
+          await downloadFileDirectly(result.blobUrl, result.filename);
+
           // Show success state briefly
-          button.textContent = 'Success!';
-          button.style.backgroundColor = '#10b981';
-          
+          updateButtonStatus(button, 'Success!', '#10b981');
+
           // Reset button after a delay
           setTimeout(() => {
-            button.disabled = false;
-            button.textContent = 'To PDF';
-            button.style.backgroundColor = '#ff424d';
+            resetButton(button);
           }, 2000);
-          
+
         } catch (error) {
           console.error('Export failed:', error);
-          
+
           // Show error state
-          button.textContent = 'Failed!';
-          button.style.backgroundColor = '#ef4444';
-          
+          updateButtonStatus(button, 'Failed!', '#ef4444');
+
           // Reset button after a delay
           setTimeout(() => {
-            button.disabled = false;
-            button.textContent = 'To PDF';
-            button.style.backgroundColor = '#ff424d';
+            resetButton(button);
           }, 2000);
         }
       });
@@ -155,36 +251,7 @@ export default defineContentScript({
       return window.location.pathname.includes('/posts/');
     }
 
-    async function exportPost(settings?: ExportSettings): Promise<{ blobUrl: string; filename: string }> {
-      
-      // Find the main post content
-      const postContent = findPostContent();
-      if (!postContent) {
-        throw new Error('Could not find post content on this page');
-      }
 
-      // Clone and clean the content
-      const cleanedContent = await cleanContent(postContent);
-      
-      // Get post title for filename
-      const postTitle = getPostTitle();
-      const filename = `${sanitizeFilename(postTitle)}.pdf`;
-
-      try {
-        // Generate PDF
-        const pdfBlob = await generatePDF(cleanedContent, settings);
-        
-        const blobUrl = URL.createObjectURL(pdfBlob);
-
-        return { blobUrl, filename };
-      } catch (error) {
-        console.error('PDF generation failed:', error);
-        throw error;
-      } finally {
-        // Clean up
-        cleanedContent.remove();
-      }
-    }
 
     function findPostContent(): Element | null {
       // Use the correct Patreon selectors based on the actual HTML structure
@@ -198,10 +265,6 @@ export default defineContentScript({
       for (const selector of selectors) {
         const content = document.querySelector(selector);
         if (content && content.textContent && content.textContent.trim().length > 100) {
-          
-          // Debug: Check for images in the original content
-          const originalImages = content.querySelectorAll('img');
-          
           return content;
         }
       }
@@ -336,18 +399,36 @@ export default defineContentScript({
     async function loadAllComments(): Promise<void> {
       console.log('Loading all comments...');
 
-      // Click "Load more comments" buttons
-      const loadMoreButtons = document.querySelectorAll('button[data-tag="loadMoreCommentsCta"]');
+      // Find the comments container first to limit our scope
+      const commentsContainer = document.querySelector('div[data-tag="content-card-comment-thread-container"]');
+      if (!commentsContainer) {
+        console.log('No comments container found, skipping comment expansion');
+        return;
+      }
+
+      console.log('Found comments container, expanding comments within it...');
+
+      // Only look for buttons within the comments container
+      const loadMoreButtons = commentsContainer.querySelectorAll('button[data-tag="loadMoreCommentsCta"]');
+      let clickCount = 0;
+
       for (const button of loadMoreButtons) {
         if (button instanceof HTMLElement && button.offsetParent !== null) { // Check if visible
           console.log('Clicking load more comments...');
           button.click();
+          clickCount++;
           await new Promise(resolve => setTimeout(resolve, 1000)); // Wait for loading
         }
       }
 
-      // Click "Load replies" buttons to expand all reply threads
-      const allButtons = document.querySelectorAll('button');
+      if (clickCount > 0) {
+        console.log(`Clicked ${clickCount} "load more" buttons`);
+      }
+
+      // Click "Load replies" buttons within comments container only
+      const allButtons = commentsContainer.querySelectorAll('button');
+      let replyClickCount = 0;
+
       for (const button of allButtons) {
         const buttonText = button.textContent?.toLowerCase() || '';
         const ariaLabel = button.getAttribute('aria-label')?.toLowerCase() || '';
@@ -358,30 +439,20 @@ export default defineContentScript({
           if (button instanceof HTMLElement && button.offsetParent !== null) {
             console.log(`Clicking replies button: ${buttonText || ariaLabel}`);
             button.click();
+            replyClickCount++;
             await new Promise(resolve => setTimeout(resolve, 500)); // Wait for loading
           }
         }
       }
 
-      // Also try to find and click any "Show more" or similar buttons
-      const showMoreButtons = document.querySelectorAll('button');
-      for (const button of showMoreButtons) {
-        const buttonText = button.textContent?.toLowerCase() || '';
-        if ((buttonText.includes('load') && (buttonText.includes('more') || buttonText.includes('replies'))) ||
-            buttonText.includes('show more') ||
-            buttonText.includes('expand')) {
-          if (button instanceof HTMLElement && button.offsetParent !== null) {
-            console.log(`Clicking button: ${buttonText}`);
-            button.click();
-            await new Promise(resolve => setTimeout(resolve, 500));
-          }
-        }
+      if (replyClickCount > 0) {
+        console.log(`Clicked ${replyClickCount} reply buttons`);
       }
 
       console.log('Finished loading all comments');
 
       // Wait a bit more for all content to load
-      await new Promise(resolve => setTimeout(resolve, 2000));
+      await new Promise(resolve => setTimeout(resolve, 1500));
     }
 
     async function processCommentsWithThreads(commentsContainer: HTMLElement, cleanCommentsSection: HTMLElement): Promise<number> {
@@ -718,37 +789,74 @@ export default defineContentScript({
     }
 
     function getPostTitle(): string {
-      // Use correct Patreon selectors for post title
+      console.log('Extracting post title...');
+
+      // Use the exact selector from the provided HTML
       const titleSelectors = [
-        'span[data-tag="post-title"]',     // Correct Patreon post title selector
-        'div[data-tag="creator-header"] h2', // Creator name as fallback
-        'h1',
-        'h2',
-        'meta[property="og:title"]'
+        'span[data-tag="post-title"]',     // Primary: Exact selector from your example
+        'h1[data-tag="post-title"]',       // Alternative post title selector
+        'div[data-tag="post-title"]',      // Another alternative
+        '[data-tag="post-title"]',        // Any element with post-title tag
+        'meta[property="og:title"]',       // Open Graph title
+        'title',                           // Page title as fallback
+        'div[data-tag="creator-header"] h2', // Creator name as last resort
       ];
 
       for (const selector of titleSelectors) {
         const element = document.querySelector(selector);
+        console.log(`Trying selector "${selector}":`, element);
+
         if (element) {
+          let title = '';
+
           if (element.tagName === 'META') {
-            return element.getAttribute('content') || 'patreon-post';
+            title = element.getAttribute('content') || '';
+          } else if (element.tagName === 'TITLE') {
+            // Clean up page title (remove " | Patreon" suffix)
+            title = element.textContent?.replace(/\s*\|\s*Patreon\s*$/i, '') || '';
+          } else {
+            title = element.textContent?.trim() || '';
           }
-          const title = element.textContent?.trim();
-          if (title && title.length > 0) {
+
+          console.log(`Extracted title: "${title}"`);
+
+          if (title && title.length > 0 && title.length < 200) { // Reasonable title length
             return title;
           }
         }
       }
 
-      return 'patreon-post';
+      // If no title found, try to extract from URL
+      const urlPath = window.location.pathname;
+      const urlMatch = urlPath.match(/\/posts\/(\d+)/);
+      if (urlMatch) {
+        console.log('Using URL-based title');
+        return `Patreon Post ${urlMatch[1]}`;
+      }
+
+      console.log('Using fallback title');
+      return 'Patreon Post';
     }
 
     function sanitizeFilename(filename: string): string {
-      return filename
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, '-')
-        .replace(/^-+|-+$/g, '')
-        .substring(0, 100); // Limit length
+      console.log('Sanitizing filename:', filename);
+
+      const sanitized = filename
+        // Replace all problematic characters with underscores
+        .replace(/[<>:"/\\|?*]/g, '_') // Invalid filename characters
+        .replace(/[!@#$%^&*()+=\[\]{}|;':",.<>?]/g, '_') // Special symbols including !
+        .replace(/[丨｜]/g, '_') // Chinese pipe characters
+        .replace(/[\s\t\n\r]+/g, '_') // All whitespace (spaces, tabs, newlines)
+        .replace(/[^\w\u4e00-\u9fff_-]/g, '_') // Keep only letters, numbers, Chinese chars, underscore, hyphen
+        .replace(/_{2,}/g, '_') // Merge multiple underscores into one
+        .replace(/^_+|_+$/g, '') // Remove leading/trailing underscores
+        .substring(0, 100) // Limit length to 100 characters
+        .trim();
+
+      console.log('Sanitized filename:', sanitized);
+
+      // Fallback if everything is removed
+      return sanitized || 'Patreon_Post';
     }
 
     async function generatePDF(content: HTMLElement, settings?: ExportSettings): Promise<Blob> {

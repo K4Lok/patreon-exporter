@@ -7,11 +7,11 @@ export default defineBackground(() => {
       // Handle the download asynchronously
       (async () => {
         try {
-          // Download the PDF
+          // Download the PDF directly without save dialog
           const downloadId = await browser.downloads.download({
             url: message.blobUrl,
             filename: message.filename,
-            saveAs: true
+            saveAs: false  // This prevents the save dialog
           });
 
           console.log('Download started:', downloadId);
