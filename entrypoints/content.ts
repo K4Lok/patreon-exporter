@@ -211,9 +211,6 @@ export default defineContentScript({
 
     async function cleanContent(originalContent: Element): Promise<HTMLElement> {
       
-      // Check images in original content before cloning
-      const originalImages = originalContent.querySelectorAll('img');
-      
       // Create a hidden container for cleaned content
       const container = document.createElement('div');
       container.style.cssText = `
@@ -230,30 +227,31 @@ export default defineContentScript({
       
       // Clone the content
       const clonedContent = originalContent.cloneNode(true) as HTMLElement;
-      
-      // Check images in cloned content before removal
-      const clonedImages = clonedContent.querySelectorAll('img');
-      
+
+      // Extract and process comments before removing them
+      const commentsSection = await extractAndProcessComments(clonedContent);
+      console.log('Comments section created:', commentsSection ? 'Yes' : 'No');
+
       // Remove unwanted elements using correct Patreon selectors
       const selectorsToRemove = [
         // Post footer/reactions
         'button[data-tag="like-button"]',
-        'span[data-tag="like-count"]', 
+        'span[data-tag="like-count"]',
         'button[data-tag="comment-post-icon"]',
         'button[data-tag="more-actions-button"]',
         'button[data-tag="share-post-icon"]',
-        
-        // Comments section
+
+        // Comments section (will be re-added in processed form)
         'div[data-tag="content-card-comment-thread-container"]',
         'div[data-tag="comment-row"]',
         'button[data-tag="loadMoreCommentsCta"]',
         'textarea[data-tag="comment-field"]',
-        
+
         // Generic unwanted elements
         'button',
         'nav',
         '[role="navigation"]',
-        
+
         // Remove problematic media elements but keep images
         'video',
         'audio',
@@ -274,21 +272,317 @@ export default defineContentScript({
           }
         });
       });
-      
-      
-      // Check images after cleanup but before adding to DOM
-      const imagesAfterCleanup = clonedContent.querySelectorAll('img');
-
       container.appendChild(clonedContent);
       document.body.appendChild(container);
-      
-      // Check images after adding to DOM
-      const imagesInContainer = container.querySelectorAll('img');
-      
+
       // Replace all external images with placeholders immediately
       await replaceImagesWithPlaceholders(container);
-      
+
+      // Add processed comments section if it exists
+      if (commentsSection) {
+        console.log('Adding comments section to container');
+        container.appendChild(commentsSection);
+        console.log('Comments section added. Container children count:', container.children.length);
+      } else {
+        console.log('No comments section to add');
+      }
+
       return container;
+    }
+
+    async function extractAndProcessComments(_content: HTMLElement): Promise<HTMLElement | null> {
+      // First, try to load all comments by clicking "Load more" buttons
+      await loadAllComments();
+
+      // Find the comments container from the live DOM (not cloned content)
+      const liveCommentsContainer = document.querySelector('div[data-tag="content-card-comment-thread-container"]');
+      if (!liveCommentsContainer) {
+        console.log('No comments found');
+        return null;
+      }
+
+      console.log('Processing comments with thread structure...');
+
+      // Create a clean comments section (very compact)
+      const cleanCommentsSection = document.createElement('div');
+      cleanCommentsSection.style.cssText = `
+        margin-top: 15px;
+        padding-top: 8px;
+        border-top: 1px solid #e0e0e0;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      `;
+
+      // Add comments header (compact)
+      const commentsHeader = document.createElement('h3');
+      commentsHeader.textContent = 'Comments';
+      commentsHeader.style.cssText = `
+        font-size: 14px;
+        font-weight: 600;
+        margin-bottom: 6px;
+        color: #333;
+        border-bottom: 1px solid #e0e0e0;
+        padding-bottom: 3px;
+      `;
+      cleanCommentsSection.appendChild(commentsHeader);
+
+      // Process comments with thread structure
+      const commentCount = await processCommentsWithThreads(liveCommentsContainer as HTMLElement, cleanCommentsSection);
+
+      console.log(`Processed ${commentCount} comments with replies`);
+
+      return commentCount > 0 ? cleanCommentsSection : null;
+    }
+
+    async function loadAllComments(): Promise<void> {
+      console.log('Loading all comments...');
+
+      // Click "Load more comments" buttons
+      const loadMoreButtons = document.querySelectorAll('button[data-tag="loadMoreCommentsCta"]');
+      for (const button of loadMoreButtons) {
+        if (button instanceof HTMLElement && button.offsetParent !== null) { // Check if visible
+          console.log('Clicking load more comments...');
+          button.click();
+          await new Promise(resolve => setTimeout(resolve, 1000)); // Wait for loading
+        }
+      }
+
+      // Click "Load replies" buttons to expand all reply threads
+      const allButtons = document.querySelectorAll('button');
+      for (const button of allButtons) {
+        const buttonText = button.textContent?.toLowerCase() || '';
+        const ariaLabel = button.getAttribute('aria-label')?.toLowerCase() || '';
+
+        if ((buttonText.includes('load') && buttonText.includes('replies')) ||
+            (ariaLabel.includes('replies')) ||
+            buttonText.includes('collapse replies')) {
+          if (button instanceof HTMLElement && button.offsetParent !== null) {
+            console.log(`Clicking replies button: ${buttonText || ariaLabel}`);
+            button.click();
+            await new Promise(resolve => setTimeout(resolve, 500)); // Wait for loading
+          }
+        }
+      }
+
+      // Also try to find and click any "Show more" or similar buttons
+      const showMoreButtons = document.querySelectorAll('button');
+      for (const button of showMoreButtons) {
+        const buttonText = button.textContent?.toLowerCase() || '';
+        if ((buttonText.includes('load') && (buttonText.includes('more') || buttonText.includes('replies'))) ||
+            buttonText.includes('show more') ||
+            buttonText.includes('expand')) {
+          if (button instanceof HTMLElement && button.offsetParent !== null) {
+            console.log(`Clicking button: ${buttonText}`);
+            button.click();
+            await new Promise(resolve => setTimeout(resolve, 500));
+          }
+        }
+      }
+
+      console.log('Finished loading all comments');
+
+      // Wait a bit more for all content to load
+      await new Promise(resolve => setTimeout(resolve, 2000));
+    }
+
+    async function processCommentsWithThreads(commentsContainer: HTMLElement, cleanCommentsSection: HTMLElement): Promise<number> {
+      let commentCount = 0;
+
+      console.log('Processing comments with threads...');
+      console.log('Comments container:', commentsContainer);
+
+      // Try multiple selectors to find comments
+      let topLevelComments = commentsContainer.querySelectorAll(':scope > div > div > div[data-tag="comment-row"]');
+      console.log('Found top-level comments (method 1):', topLevelComments.length);
+
+      if (topLevelComments.length === 0) {
+        // Try alternative selector
+        topLevelComments = commentsContainer.querySelectorAll('div[data-tag="comment-row"]');
+        console.log('Found comments (method 2):', topLevelComments.length);
+      }
+
+      if (topLevelComments.length === 0) {
+        console.log('No comments found with any selector');
+        return 0;
+      }
+
+      for (const commentRow of topLevelComments) {
+        console.log('Processing comment row:', commentRow);
+        const processedComment = processComment(commentRow as HTMLElement, 0);
+        if (processedComment) {
+          cleanCommentsSection.appendChild(processedComment);
+          commentCount++;
+          console.log('Added comment, total count:', commentCount);
+
+          // Look for replies to this comment
+          const repliesCount = await processReplies(commentRow as HTMLElement, cleanCommentsSection, 1);
+          commentCount += repliesCount;
+        } else {
+          console.log('Failed to process comment row');
+        }
+      }
+
+      console.log('Final comment count:', commentCount);
+      return commentCount;
+    }
+
+    async function processReplies(parentCommentRow: HTMLElement, container: HTMLElement, indentLevel: number): Promise<number> {
+      let replyCount = 0;
+
+      console.log('Looking for replies to comment, indent level:', indentLevel);
+
+      // Find the parent container of this comment
+      let currentElement = parentCommentRow.parentElement;
+      while (currentElement && !currentElement.classList.contains('sc-e67b4030-1')) {
+        currentElement = currentElement.parentElement;
+      }
+
+      if (!currentElement) {
+        console.log('No parent container found for replies');
+        return 0;
+      }
+
+      // Look for reply containers (usually the next sibling with class containing reply indicators)
+      const nextSibling = currentElement.nextElementSibling;
+      if (nextSibling && (nextSibling.classList.contains('sc-e67b4030-2') || nextSibling.querySelector('[data-tag="comment-row"]'))) {
+        const replyComments = nextSibling.querySelectorAll('[data-tag="comment-row"]');
+        console.log(`Found ${replyComments.length} replies at indent level ${indentLevel}`);
+
+        for (const replyRow of replyComments) {
+          const processedReply = processComment(replyRow as HTMLElement, indentLevel);
+          if (processedReply) {
+            container.appendChild(processedReply);
+            replyCount++;
+            console.log(`Added reply ${replyCount} at indent level ${indentLevel}`);
+
+            // Recursively process nested replies (though Patreon usually has max 2 levels)
+            const nestedReplies = await processReplies(replyRow as HTMLElement, container, indentLevel + 1);
+            replyCount += nestedReplies;
+          }
+        }
+      } else {
+        console.log('No reply container found');
+      }
+
+      return replyCount;
+    }
+
+    function processComment(commentRow: HTMLElement, indentLevel: number): HTMLElement | null {
+      try {
+        console.log('Processing individual comment, indent level:', indentLevel);
+
+        // Extract comment data
+        const commenterNameElement = commentRow.querySelector('button[data-tag="commenter-name"] span');
+        const commentBodyElement = commentRow.querySelector('div[data-tag="comment-body"]');
+        const timeElement = commentRow.querySelector('time');
+        const creatorBadge = commentRow.querySelector('p:has(strong)');
+
+        const commenterName = commenterNameElement?.textContent?.trim() || 'Anonymous';
+        const commentBody = commentBodyElement?.textContent?.trim() || '';
+        const timeText = timeElement?.textContent?.trim() || '';
+        const isCreator = creatorBadge?.textContent?.includes('CREATOR') || false;
+
+        console.log('Comment data:', { commenterName, commentBody: commentBody.substring(0, 50), timeText, isCreator });
+
+        if (!commentBody) {
+          console.log('Skipping empty comment');
+          return null; // Skip empty comments
+        }
+
+        // Calculate indentation for replies with more visual distinction
+        const indentPx = indentLevel * 25; // Increased indent for better visibility
+        const isReply = indentLevel > 0;
+
+        // Create clean comment element with very compact styling
+        const commentElement = document.createElement('div');
+        commentElement.style.cssText = `
+          margin-bottom: 4px;
+          margin-left: ${indentPx}px;
+          padding: 4px 6px;
+          background: ${isReply ? '#f0f0f0' : '#f8f9fa'};
+          border-radius: 3px;
+          border-left: ${isReply ? '2px' : '3px'} solid ${isCreator ? '#ff424d' : (isReply ? '#999' : '#ddd')};
+          font-size: 11px;
+          line-height: 1.3;
+          ${isReply ? 'border-top: 1px solid #e0e0e0;' : ''}
+        `;
+
+        // Comment header with name and time (very compact)
+        const commentHeader = document.createElement('div');
+        commentHeader.style.cssText = `
+          display: flex;
+          align-items: center;
+          margin-bottom: 2px;
+          font-size: 10px;
+          color: #666;
+        `;
+
+        // Reply indicator with better visual hierarchy
+        if (isReply) {
+          const replyIndicator = document.createElement('span');
+          replyIndicator.textContent = indentLevel === 1 ? '└─ ' : '  └─ ';
+          replyIndicator.style.cssText = `
+            color: #999;
+            margin-right: 3px;
+            font-family: monospace;
+          `;
+          commentHeader.appendChild(replyIndicator);
+        }
+
+        // Creator badge (very small)
+        if (isCreator) {
+          const creatorBadgeSpan = document.createElement('span');
+          creatorBadgeSpan.textContent = 'CREATOR';
+          creatorBadgeSpan.style.cssText = `
+            background: #ff424d;
+            color: white;
+            padding: 1px 3px;
+            border-radius: 2px;
+            font-size: 8px;
+            font-weight: 600;
+            margin-right: 4px;
+          `;
+          commentHeader.appendChild(creatorBadgeSpan);
+        }
+
+        const nameSpan = document.createElement('span');
+        nameSpan.textContent = commenterName;
+        nameSpan.style.cssText = `
+          font-weight: 600;
+          color: ${isCreator ? '#ff424d' : (isReply ? '#555' : '#333')};
+          margin-right: 4px;
+          font-size: ${isReply ? '10px' : '11px'};
+        `;
+        commentHeader.appendChild(nameSpan);
+
+        if (timeText) {
+          const timeSpan = document.createElement('span');
+          timeSpan.textContent = `• ${timeText}`;
+          timeSpan.style.cssText = `
+            color: #999;
+            font-size: 9px;
+          `;
+          commentHeader.appendChild(timeSpan);
+        }
+
+        // Comment body (very compact)
+        const commentBodyDiv = document.createElement('div');
+        commentBodyDiv.textContent = commentBody;
+        commentBodyDiv.style.cssText = `
+          font-size: ${isReply ? '10px' : '11px'};
+          line-height: 1.3;
+          color: ${isReply ? '#555' : '#333'};
+          word-wrap: break-word;
+          margin-top: 1px;
+        `;
+
+        commentElement.appendChild(commentHeader);
+        commentElement.appendChild(commentBodyDiv);
+
+        return commentElement;
+      } catch (error) {
+        console.error('Error processing comment:', error);
+        return null;
+      }
     }
 
     async function replaceImagesWithPlaceholders(container: HTMLElement): Promise<void> {
