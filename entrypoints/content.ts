@@ -15,6 +15,21 @@ export default defineContentScript({
     // Add a "To PDF" button to the page
     addToPdfButton();
 
+    // Monitor for page changes and update button accordingly
+    let lastUrl = window.location.href;
+    setInterval(() => {
+      if (window.location.href !== lastUrl) {
+        lastUrl = window.location.href;
+        console.log('Page changed, updating button...');
+        // Remove existing button and add new one
+        const existingButton = document.querySelector('#patreon-exporter-button');
+        if (existingButton) {
+          existingButton.remove();
+        }
+        addToPdfButton();
+      }
+    }, 1000);
+
     // Listen for messages from popup
     browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (message.cmd === 'export') {
@@ -47,8 +62,10 @@ export default defineContentScript({
 
     // Helper functions for button status updates
     function updateButtonStatus(button: HTMLButtonElement, text: string, color: string) {
+      console.log('Updating button status:', text, color);
       button.textContent = text;
       button.style.backgroundColor = color;
+      button.style.cursor = button.disabled ? 'not-allowed' : 'pointer';
     }
 
     function resetButton(button: HTMLButtonElement) {
@@ -111,11 +128,133 @@ export default defineContentScript({
       }
     }
 
-    async function exportPostWithStatus(settings: ExportSettings, button: HTMLButtonElement): Promise<{ blobUrl: string; filename: string }> {
+    async function loadAllCommentsWithCount(statusButton: HTMLButtonElement): Promise<number> {
+      console.log('Loading all comments with count...');
+      console.log('Status button:', statusButton.id);
+
+      // Find the comments container first to limit our scope
+      const commentsContainer = document.querySelector('div[data-tag="content-card-comment-thread-container"]');
+      if (!commentsContainer) {
+        console.log('No comments container found, skipping comment expansion');
+        return 0;
+      }
+
+      console.log('Found comments container, expanding comments within it...');
+
+      // Function to count current comments
+      const getCurrentCommentCount = () => {
+        return commentsContainer.querySelectorAll('div[data-tag="comment-row"]').length;
+      };
+
+      // Show initial comment count
+      let currentCount = getCurrentCommentCount();
+      updateButtonStatus(statusButton, `Expanding comments... (${currentCount})`, '#f59e0b');
+      console.log('Initial comment count:', currentCount);
+
+      // Only look for buttons within the comments container
+      const loadMoreButtons = commentsContainer.querySelectorAll('button[data-tag="loadMoreCommentsCta"]');
+
+      console.log('Found', loadMoreButtons.length, 'load more buttons');
+
+      for (const button of loadMoreButtons) {
+        if (button instanceof HTMLElement && button.offsetParent !== null) { // Check if visible
+          console.log('Clicking load more comments...');
+          button.click();
+
+          // Wait for new comments to load and update count in real-time
+          await new Promise(resolve => setTimeout(resolve, 800)); // Initial wait for loading
+
+          // Check for new comments every 200ms for up to 3 seconds
+          const maxChecks = 15; // 3 seconds / 200ms
+          for (let i = 0; i < maxChecks; i++) {
+            const newCount = getCurrentCommentCount();
+            if (newCount > currentCount) {
+              currentCount = newCount;
+              updateButtonStatus(statusButton, `Expanding comments... (${currentCount})`, '#f59e0b');
+              console.log('Updated comment count:', currentCount);
+            }
+            await new Promise(resolve => setTimeout(resolve, 200));
+          }
+        }
+      }
+
+      // Click "Load replies" buttons within comments container only
+      const allButtons = commentsContainer.querySelectorAll('button');
+      let replyClickCount = 0;
+
+      for (const button of allButtons) {
+        const buttonText = button.textContent?.toLowerCase() || '';
+        const ariaLabel = button.getAttribute('aria-label')?.toLowerCase() || '';
+
+        if ((buttonText.includes('load') && buttonText.includes('replies')) ||
+            (ariaLabel.includes('replies')) ||
+            buttonText.includes('collapse replies')) {
+          if (button instanceof HTMLElement && button.offsetParent !== null) {
+            console.log(`Clicking replies button: ${buttonText || ariaLabel}`);
+            button.click();
+            replyClickCount++;
+
+            // Wait for replies to load and update count
+            await new Promise(resolve => setTimeout(resolve, 600));
+
+            // Check for new comments after reply expansion
+            const newCount = getCurrentCommentCount();
+            if (newCount > currentCount) {
+              currentCount = newCount;
+              updateButtonStatus(statusButton, `Expanding comments... (${currentCount})`, '#f59e0b');
+              console.log('Updated comment count after replies:', currentCount);
+            }
+          }
+        }
+      }
+
+      console.log('Finished loading all comments');
+
+      // Final wait and count update
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      const finalCount = getCurrentCommentCount();
+      if (finalCount > currentCount) {
+        currentCount = finalCount;
+        updateButtonStatus(statusButton, `Expanding comments... (${currentCount})`, '#f59e0b');
+      }
+
+      console.log(`Final comment count: ${currentCount}`);
+
+      // Show final comment count
+      if (currentCount > 0) {
+        updateButtonStatus(statusButton, `Found ${currentCount} comments`, '#f59e0b');
+        await new Promise(resolve => setTimeout(resolve, 1000)); // Show this status for a moment
+      }
+
+      return currentCount;
+    }
+
+    async function calculatePDFStats(pdfBlob: Blob, commentCount: number): Promise<{ pages: number; comments: number }> {
+      // For now, we'll estimate pages based on blob size
+      // A more accurate method would require parsing the PDF, but this gives a reasonable estimate
+      const sizeInKB = pdfBlob.size / 1024;
+      const estimatedPages = Math.max(1, Math.ceil(sizeInKB / 50)); // Rough estimate: 50KB per page
+
+      console.log(`PDF Stats - Size: ${sizeInKB.toFixed(1)}KB, Estimated Pages: ${estimatedPages}, Comments: ${commentCount}`);
+
+      return {
+        pages: estimatedPages,
+        comments: commentCount
+      };
+    }
+
+    async function exportPostWithStatus(settings: ExportSettings, button: HTMLButtonElement): Promise<{ blobUrl: string; filename: string; stats: { pages: number; comments: number } }> {
+      console.log('exportPostWithStatus called with button:', button.id);
+      let commentCount = 0;
+
       // Only expand comments if the setting is enabled
       if (settings.includeComments !== false) {
+        console.log('Starting comment expansion...');
         updateButtonStatus(button, 'Expanding comments...', '#f59e0b');
+        commentCount = await loadAllCommentsWithCount(button);
+        console.log('Comment expansion completed, count:', commentCount);
       } else {
+        console.log('Comments disabled, skipping...');
         updateButtonStatus(button, 'Processing content...', '#8b5cf6');
       }
 
@@ -125,7 +264,8 @@ export default defineContentScript({
         throw new Error('Could not find post content on this page');
       }
 
-      updateButtonStatus(button, 'Expanding comments...', '#8b5cf6');
+      updateButtonStatus(button, 'Processing content...', '#8b5cf6');
+      await new Promise(resolve => setTimeout(resolve, 800)); // Show this status
 
       // Clone and clean the content
       const cleanedContent = await cleanContent(postContent, settings.includeComments !== false);
@@ -139,13 +279,17 @@ export default defineContentScript({
 
       try {
         updateButtonStatus(button, 'Generating PDF...', '#06b6d4');
+        await new Promise(resolve => setTimeout(resolve, 500)); // Show this status
 
-        // Generate PDF
-        const pdfBlob = await generatePDF(cleanedContent, settings);
+        // Generate PDF with progress updates
+        const pdfBlob = await generatePDFWithProgress(cleanedContent, settings, button);
 
         const blobUrl = URL.createObjectURL(pdfBlob);
 
-        return { blobUrl, filename };
+        // Calculate PDF stats
+        const stats = await calculatePDFStats(pdfBlob, commentCount);
+
+        return { blobUrl, filename, stats };
       } catch (error) {
         console.error('PDF generation failed:', error);
         throw error;
@@ -157,14 +301,20 @@ export default defineContentScript({
 
     // Function to add a "To PDF" button to the page
     function addToPdfButton() {
-      // Only add the button if we're on a post page
-      if (!isPostPage()) return;
+      // Check if button already exists
+      if (document.querySelector('#patreon-exporter-button')) {
+        return;
+      }
+
+      // Check if we're on a valid post page
+      const isValidPage = isPostPage();
 
       // Create the button element
       const button = document.createElement('button');
-      button.textContent = 'To PDF';
+      button.textContent = isValidPage ? 'To PDF' : 'Not a post page';
       button.id = 'patreon-exporter-button';
-      
+      button.disabled = !isValidPage;
+
       // Style the button
       button.style.cssText = `
         position: fixed;
@@ -174,30 +324,41 @@ export default defineContentScript({
         font-size: 14px;
         font-weight: 600;
         color: white;
-        background-color: #ff424d;
+        background-color: ${isValidPage ? '#ff424d' : '#cccccc'};
         border: none;
         border-radius: 8px;
-        cursor: pointer;
+        cursor: ${isValidPage ? 'pointer' : 'not-allowed'};
         z-index: 9999;
         box-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
         transition: all 0.2s ease;
+        opacity: ${isValidPage ? '1' : '0.6'};
       `;
-      
-      // Add hover effect
-      button.addEventListener('mouseover', () => {
-        button.style.backgroundColor = '#e63946';
-        button.style.transform = 'translateY(-2px)';
-        button.style.boxShadow = '0 4px 12px rgba(255, 66, 77, 0.3)';
-      });
-      
-      button.addEventListener('mouseout', () => {
-        button.style.backgroundColor = '#ff424d';
-        button.style.transform = 'translateY(0)';
-        button.style.boxShadow = '0 2px 10px rgba(0, 0, 0, 0.2)';
-      });
+
+      // Add hover effect only for valid pages
+      if (isValidPage) {
+        button.addEventListener('mouseover', () => {
+          if (!button.disabled) {
+            button.style.backgroundColor = '#e63946';
+            button.style.transform = 'translateY(-2px)';
+            button.style.boxShadow = '0 4px 12px rgba(255, 66, 77, 0.3)';
+          }
+        });
+
+        button.addEventListener('mouseout', () => {
+          if (!button.disabled) {
+            button.style.backgroundColor = '#ff424d';
+            button.style.transform = 'translateY(0)';
+            button.style.boxShadow = '0 2px 10px rgba(0, 0, 0, 0.2)';
+          }
+        });
+      }
       
       // Add click handler to export the post
       button.addEventListener('click', async () => {
+        console.log('Export button clicked, starting process...');
+        console.log('Button element:', button);
+        console.log('Button ID:', button.id);
+
         // Change button state to indicate processing
         button.disabled = true;
         updateButtonStatus(button, 'Preparing...', '#cccccc');
@@ -212,6 +373,8 @@ export default defineContentScript({
             showDownloadDialog: settings.showDownloadDialog !== undefined ? settings.showDownloadDialog : false
           };
 
+          console.log('Export settings:', exportSettings);
+
           // Export the post with status updates
           const result = await exportPostWithStatus(exportSettings, button);
 
@@ -219,13 +382,14 @@ export default defineContentScript({
           updateButtonStatus(button, 'Downloading...', '#4f46e5');
           await downloadFileDirectly(result.blobUrl, result.filename, exportSettings.showDownloadDialog);
 
-          // Show success state briefly
-          updateButtonStatus(button, 'Success!', '#10b981');
+          // Show success state with stats
+          const stats = result.stats;
+          updateButtonStatus(button, `Success! ${stats.pages}p, ${stats.comments}c`, '#10b981');
 
           // Reset button after a delay
           setTimeout(() => {
             resetButton(button);
-          }, 2000);
+          }, 3000);
 
         } catch (error) {
           console.error('Export failed:', error);
@@ -246,21 +410,35 @@ export default defineContentScript({
     
     // Check if we're on a post page
     function isPostPage(): boolean {
+      // Check URL pattern first - must be a posts URL
+      const url = window.location.href;
+      const isPostURL = /https:\/\/www\.patreon\.com\/posts\//.test(url);
+
+      if (!isPostURL) {
+        console.log('Not a post URL:', url);
+        return false;
+      }
+
       // Check for post-specific elements
       const postSelectors = [
         'div[data-tag="post-card"]',
         'article[data-tag="post-card"]',
+        'span[data-tag="post-title"]', // Post title element
         // Add more specific selectors if needed
       ];
-      
+
       for (const selector of postSelectors) {
         if (document.querySelector(selector)) {
+          console.log('Found post element:', selector);
           return true;
         }
       }
-      
-      // Check URL pattern as fallback
-      return window.location.pathname.includes('/posts/');
+
+      // Check if we can find post content
+      const hasPostContent = !!findPostContent();
+      console.log('Post content found:', hasPostContent);
+
+      return hasPostContent;
     }
 
 
@@ -876,7 +1054,7 @@ export default defineContentScript({
       return sanitized || 'Patreon_Post';
     }
 
-    async function generatePDF(content: HTMLElement, settings?: ExportSettings): Promise<Blob> {
+    async function generatePDFWithProgress(content: HTMLElement, settings: ExportSettings | undefined, button: HTMLButtonElement): Promise<Blob> {
       const imageQuality = settings?.imageQuality || 'high';
 
       // Page dimensions for Letter size with proper margins
@@ -965,8 +1143,8 @@ export default defineContentScript({
 
         console.log('Canvas created successfully, size:', canvas.width, 'x', canvas.height);
 
-        // Create PDF with intelligent pagination
-        return await createPDFWithSimplePagination(canvas, quality);
+        // Create PDF with intelligent pagination and progress updates
+        return await createPDFWithSimplePagination(canvas, quality, button);
       } catch (error) {
         console.error('PDF generation failed with detailed error:', error);
         console.error('Error stack:', error instanceof Error ? error.stack : 'No stack trace');
@@ -976,7 +1154,8 @@ export default defineContentScript({
 
     async function createPDFWithSimplePagination(
       canvas: HTMLCanvasElement,
-      quality: { scale: number; jpegQuality: number }
+      quality: { scale: number; jpegQuality: number },
+      button?: HTMLButtonElement
     ): Promise<Blob> {
       console.log('Creating PDF with simple pagination...');
 
@@ -1017,6 +1196,15 @@ export default defineContentScript({
       for (let pageIndex = 0; pageIndex < totalPages; pageIndex++) {
         if (pageIndex > 0) {
           pdf.addPage();
+        }
+
+        // Update progress on button with a small delay to make it visible
+        if (button) {
+          updateButtonStatus(button, `Generating PDF... (${pageIndex + 1}/${totalPages})`, '#06b6d4');
+          // Add a small delay every few pages to make progress visible
+          if (pageIndex % 3 === 0) {
+            await new Promise(resolve => setTimeout(resolve, 100));
+          }
         }
 
         // Calculate the portion of the canvas for this page

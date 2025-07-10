@@ -86,8 +86,9 @@ function App() {
           });
 
           if (downloadResponse && downloadResponse.success) {
-            setStatus('Success!');
-            setTimeout(() => window.close(), 2000);
+            const stats = response.data.stats;
+            setStatus(`Success! ${stats.pages} pages, ${stats.comments} comments`);
+            setTimeout(() => window.close(), 3000);
           } else {
             throw new Error(downloadResponse?.error || 'Download failed');
           }
@@ -102,8 +103,9 @@ function App() {
           });
 
           if (downloadResponse && downloadResponse.success) {
-            setStatus('Success!');
-            setTimeout(() => window.close(), 2000);
+            const stats = response.data.stats;
+            setStatus(`Success! ${stats.pages} pages, ${stats.comments} comments`);
+            setTimeout(() => window.close(), 3000);
           } else {
             throw new Error(downloadResponse?.error || 'Download failed');
           }
