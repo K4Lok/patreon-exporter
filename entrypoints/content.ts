@@ -22,6 +22,8 @@ export default defineContentScript({
         // Handle async export - create a dummy button for status (popup export)
         const dummyButton = document.createElement('button') as HTMLButtonElement;
 
+        // For popup exports, we only generate the PDF and return the blob URL
+        // The popup will handle the download with the correct settings
         exportPostWithStatus(message.settings, dummyButton)
           .then((result: { blobUrl: string; filename: string }) => {
             sendResponse({ success: true, data: result });

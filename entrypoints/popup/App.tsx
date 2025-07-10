@@ -12,7 +12,6 @@ function App() {
   const [isExporting, setIsExporting] = useState(false);
   const [status, setStatus] = useState<string>('');
   const [error, setError] = useState<string>('');
-  const [isSuccess, setIsSuccess] = useState(false);
   const [isPatreonPage, setIsPatreonPage] = useState(false);
   const [settings, setSettings] = useState<ExportSettings>({
     pageSize: 'letter',
@@ -45,7 +44,6 @@ function App() {
     setIsExporting(true);
     setError('');
     setStatus('Preparing export...');
-    setIsSuccess(false);
 
     try {
       // Get current tab
@@ -55,11 +53,16 @@ function App() {
         throw new Error('No active tab found');
       }
 
-      // Send message to content script
-      setStatus('Extracting post content...');
-      const response = await browser.tabs.sendMessage(tab.id, { 
+      // Send message to content script with status updates
+      if (settings.includeComments) {
+        setStatus('Expanding comments...');
+      } else {
+        setStatus('Processing content...');
+      }
+
+      const response = await browser.tabs.sendMessage(tab.id, {
         cmd: 'export',
-        settings 
+        settings
       });
 
       console.log('Content script response:', response);
@@ -70,20 +73,40 @@ function App() {
 
       if (response.success && response.data) {
         setStatus('Generating PDF...');
-        
-        // Send download command to background script
-        const downloadResponse = await browser.runtime.sendMessage({
-          cmd: 'download',
-          blobUrl: response.data.blobUrl,
-          filename: response.data.filename
-        });
 
-        if (downloadResponse && downloadResponse.success) {
-          setStatus('PDF exported successfully!');
-          setIsSuccess(true);
-          setTimeout(() => window.close(), 2000);
+        // Handle download based on user preference
+        if (settings.showDownloadDialog) {
+          setStatus('Downloading...');
+          // Send download command to background script with dialog
+          const downloadResponse = await browser.runtime.sendMessage({
+            cmd: 'download',
+            blobUrl: response.data.blobUrl,
+            filename: response.data.filename,
+            showDialog: true
+          });
+
+          if (downloadResponse && downloadResponse.success) {
+            setStatus('Success!');
+            setTimeout(() => window.close(), 2000);
+          } else {
+            throw new Error(downloadResponse?.error || 'Download failed');
+          }
         } else {
-          throw new Error(downloadResponse?.error || 'Download failed');
+          setStatus('Downloading...');
+          // Direct download without dialog
+          const downloadResponse = await browser.runtime.sendMessage({
+            cmd: 'download',
+            blobUrl: response.data.blobUrl,
+            filename: response.data.filename,
+            showDialog: false
+          });
+
+          if (downloadResponse && downloadResponse.success) {
+            setStatus('Success!');
+            setTimeout(() => window.close(), 2000);
+          } else {
+            throw new Error(downloadResponse?.error || 'Download failed');
+          }
         }
       } else {
         throw new Error(response?.error || 'Export failed');
@@ -92,7 +115,6 @@ function App() {
       console.error('Export error:', err);
       setError(err instanceof Error ? err.message : 'Export failed');
       setStatus('');
-      setIsSuccess(false);
     } finally {
       setIsExporting(false);
     }
@@ -169,15 +191,14 @@ function App() {
         </div>
       </div>
 
-      <button 
+      <button
         className="export-button"
         onClick={handleExport}
         disabled={isExporting}
       >
-        {isExporting ? 'Exporting...' : 'Export to PDF'}
+        {isExporting ? status || 'Exporting...' : 'Export to PDF'}
       </button>
 
-      {status && <div className={isSuccess ? "success" : "status"}>{status}</div>}
       {error && <div className="error">{error}</div>}
 
       <div className="footer">
