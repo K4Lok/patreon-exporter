@@ -310,6 +310,9 @@ export default defineContentScript({
       );
       
       await Promise.allSettled(imagePromises);
+
+      // Add a small delay to ensure all images are fully loaded and rendered
+      await new Promise(resolve => setTimeout(resolve, 1000));
     }
 
     async function processImageWithFetch(img: HTMLImageElement, index: number): Promise<void> {
@@ -346,12 +349,26 @@ export default defineContentScript({
           img.style.maxWidth = '100%';
           img.style.height = 'auto';
           img.style.display = 'block';
-          img.style.margin = '10px 0';
-          
+          img.style.margin = '20px 0';
+          img.style.objectFit = 'contain';
+          img.style.breakInside = 'avoid';
+
           // Clean up blob URL after some time (but not too soon for PDF generation)
           setTimeout(() => {
             URL.revokeObjectURL(blobUrl);
           }, 60000); // 1 minute should be enough for PDF generation
+
+          // Ensure image loads properly before PDF generation
+          return new Promise<void>((resolve) => {
+            if (img.complete) {
+              resolve();
+            } else {
+              img.onload = () => resolve();
+              img.onerror = () => resolve(); // Continue even if image fails to load
+              // Timeout after 5 seconds
+              setTimeout(() => resolve(), 5000);
+            }
+          });
           
         } else {
           throw new Error(`HTTP ${response.status}: ${response.statusText}`);
@@ -443,29 +460,29 @@ export default defineContentScript({
     async function generatePDF(content: HTMLElement, settings?: ExportSettings): Promise<Blob> {
       const pageSize = settings?.pageSize || 'a4';
       const imageQuality = settings?.imageQuality || 'high';
-      
+
       // Page dimensions based on settings with proper margins
       const pageDimensions: Record<'a4' | 'letter', { width: number; height: number }> = {
         a4: { width: 794, height: 1123 },
         letter: { width: 816, height: 1056 }
       };
-      
+
       const dimensions = pageDimensions[pageSize];
       const marginTop = 60;
       const marginBottom = 60;
       const marginLeft = 50;
       const marginRight = 50;
       const contentWidth = dimensions.width - marginLeft - marginRight;
-      
+
       // Image quality settings
       const qualityMap: Record<'high' | 'medium' | 'low', { scale: number; jpegQuality: number }> = {
         high: { scale: 2, jpegQuality: 1.00 },
         medium: { scale: 1.5, jpegQuality: 0.85 },
         low: { scale: 1, jpegQuality: 0.75 }
       };
-      
+
       const quality = qualityMap[imageQuality];
-      
+
       // Update content styling for better PDF layout
       content.style.cssText += `
         width: ${contentWidth}px !important;
@@ -479,119 +496,161 @@ export default defineContentScript({
         overflow-wrap: break-word !important;
         box-sizing: border-box !important;
       `;
-      
+
       // Clean up styles and add spacing for all elements
       content.querySelectorAll('*').forEach((el) => {
         const htmlEl = el as HTMLElement;
-        
+
         // Remove position fixed/absolute
         if (htmlEl.style.position === 'fixed' || htmlEl.style.position === 'absolute') {
           htmlEl.style.position = 'relative';
         }
-        
+
         // Add proper spacing for text elements
         if (['P', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'BLOCKQUOTE', 'DIV'].includes(htmlEl.tagName)) {
           htmlEl.style.marginBottom = '16px';
-          // Add page break restrictions to avoid content being cut across pages
-          htmlEl.style.pageBreakInside = 'avoid';
         }
-        
-        // Style placeholder divs (our image replacements)
-        if (htmlEl.tagName === 'DIV' && htmlEl.style.background?.includes('gradient')) {
+
+        // Style images and placeholder divs (our image replacements)
+        if (htmlEl.tagName === 'IMG' || (htmlEl.tagName === 'DIV' && htmlEl.style.background?.includes('gradient'))) {
           htmlEl.style.marginTop = '20px';
           htmlEl.style.marginBottom = '20px';
-          // Make sure images don't get split across pages
-          htmlEl.style.pageBreakInside = 'avoid';
+          htmlEl.style.maxWidth = '100%';
+          htmlEl.style.height = 'auto';
+          htmlEl.style.display = 'block';
+          htmlEl.style.objectFit = 'contain';
+          htmlEl.style.breakInside = 'avoid';
+          // Add a data attribute to mark as image content for pagination
+          htmlEl.setAttribute('data-image-content', 'true');
         }
       });
-      
+
       try {
-        // Convert HTML to canvas - now much simpler without CORS issues
+        console.log('Starting improved PDF generation...');
+
+        // Convert HTML to canvas first - single canvas approach
         const canvas = await html2canvas(content, {
           scale: quality.scale,
           useCORS: false,
-          allowTaint: true, // Allow tainted canvas since we're using blob URLs
+          allowTaint: true,
           logging: false,
           windowWidth: dimensions.width,
           windowHeight: dimensions.height + 200,
           backgroundColor: '#ffffff',
           removeContainer: false,
-          imageTimeout: 15000, // Increased timeout for blob URL images
+          imageTimeout: 15000,
           onclone: (clonedDoc) => {
             // Final cleanup - remove any remaining problematic elements
             const problematicElements = clonedDoc.querySelectorAll('video, audio, iframe, embed, object');
             problematicElements.forEach(el => el.remove());
-            
+
             // Also remove any images that still have external URLs (not blob/data)
             const externalImages = clonedDoc.querySelectorAll('img[src^="http"]:not([src^="blob:"]):not([src^="data:"])');
             externalImages.forEach(el => el.remove());
-            
           },
         });
 
-        // Create PDF with pagination
-        const pdf = new jsPDF({
-          orientation: 'portrait',
-          unit: 'px',
-          format: pageSize === 'letter' ? 'letter' : 'a4'
-        });
+        console.log('Canvas created successfully, size:', canvas.width, 'x', canvas.height);
 
-        const pdfWidth = pdf.internal.pageSize.getWidth();
-        const pdfHeight = pdf.internal.pageSize.getHeight();
-        const imgWidth = pdfWidth;
-        const imgHeight = (canvas.height * imgWidth) / canvas.width;
-
-        // Improved pagination with overlap to prevent text cutoff
-        const pageOverlap = 40; // Overlap between pages to prevent cutoff
-        const effectivePageHeight = pdfHeight - pageOverlap;
-        const totalPages = Math.ceil(imgHeight / effectivePageHeight);
-        
-        for (let pageIndex = 0; pageIndex < totalPages; pageIndex++) {
-          if (pageIndex > 0) {
-            pdf.addPage();
-          }
-
-          // Calculate the portion of the canvas for this page with overlap
-          const sourceY = Math.max(0, (pageIndex * effectivePageHeight * canvas.height) / imgHeight - (pageIndex > 0 ? pageOverlap : 0));
-          const sourceHeight = Math.min(
-            (pdfHeight * canvas.height) / imgHeight,
-            canvas.height - sourceY
-          );
-
-          // Ensure we don't go beyond the canvas
-          if (sourceY >= canvas.height) break;
-
-          // Create a canvas for this page
-          const pageCanvas = document.createElement('canvas');
-          pageCanvas.width = canvas.width;
-          pageCanvas.height = Math.min(sourceHeight, canvas.height - sourceY);
-          const ctx = pageCanvas.getContext('2d')!;
-          
-          // Fill with white background
-          ctx.fillStyle = '#ffffff';
-          ctx.fillRect(0, 0, pageCanvas.width, pageCanvas.height);
-          
-          // Draw the portion of the original canvas
-          ctx.drawImage(
-            canvas,
-            0, sourceY, canvas.width, pageCanvas.height,
-            0, 0, canvas.width, pageCanvas.height
-          );
-
-          // Convert to image and add to PDF
-          const pageData = pageCanvas.toDataURL('image/jpeg', quality.jpegQuality);
-          
-          // Calculate actual height for this page
-          const actualPageHeight = Math.min(pdfHeight, (pageCanvas.height * imgWidth) / canvas.width);
-          
-          pdf.addImage(pageData, 'JPEG', 0, 0, imgWidth, actualPageHeight);
-        }
-
-        return pdf.output('blob');
+        // Create PDF with intelligent pagination
+        return await createPDFWithSimplePagination(canvas, quality, pageSize);
       } catch (error) {
-        console.error('PDF generation failed:', error);
+        console.error('PDF generation failed with detailed error:', error);
+        console.error('Error stack:', error instanceof Error ? error.stack : 'No stack trace');
         throw new Error(`Failed to generate PDF: ${error instanceof Error ? error.message : 'Unknown error'}`);
       }
     }
+
+    async function createPDFWithSimplePagination(
+      canvas: HTMLCanvasElement,
+      quality: { scale: number; jpegQuality: number },
+      pageSize: 'a4' | 'letter'
+    ): Promise<Blob> {
+      console.log('Creating PDF with simple pagination...');
+
+      // Create PDF
+      const pdf = new jsPDF({
+        orientation: 'portrait',
+        unit: 'px',
+        format: pageSize === 'letter' ? 'letter' : 'a4'
+      });
+
+      const pdfWidth = pdf.internal.pageSize.getWidth();
+      const pdfHeight = pdf.internal.pageSize.getHeight();
+      console.log('PDF dimensions:', { pdfWidth, pdfHeight });
+
+      const imgWidth = pdfWidth;
+      const imgHeight = (canvas.height * imgWidth) / canvas.width;
+
+      console.log('Canvas to PDF ratio:', { canvasHeight: canvas.height, imgHeight, pdfHeight });
+
+      // If content fits on one page, add it directly
+      if (imgHeight <= pdfHeight) {
+        console.log('Content fits on one page');
+        const imageData = canvas.toDataURL('image/jpeg', quality.jpegQuality);
+        pdf.addImage(imageData, 'JPEG', 0, 0, imgWidth, imgHeight);
+        return pdf.output('blob');
+      }
+
+      // Content needs multiple pages - use improved pagination
+      console.log('Content needs multiple pages');
+
+      // Calculate pages needed with minimal overlap to prevent cutting content
+      const pageOverlap = 10; // Minimal overlap to prevent content cutoff
+      const effectivePageHeight = pdfHeight - pageOverlap;
+      const totalPages = Math.ceil(imgHeight / effectivePageHeight);
+
+      console.log('Total pages needed:', totalPages);
+
+      for (let pageIndex = 0; pageIndex < totalPages; pageIndex++) {
+        if (pageIndex > 0) {
+          pdf.addPage();
+        }
+
+        // Calculate the portion of the canvas for this page
+        const sourceY = Math.max(0, (pageIndex * effectivePageHeight * canvas.height) / imgHeight - (pageIndex > 0 ? pageOverlap : 0));
+        const sourceHeight = Math.min(
+          (pdfHeight * canvas.height) / imgHeight,
+          canvas.height - sourceY
+        );
+
+        console.log(`Page ${pageIndex + 1}: sourceY=${Math.round(sourceY)}, sourceHeight=${Math.round(sourceHeight)}`);
+
+        // Ensure we don't go beyond the canvas
+        if (sourceY >= canvas.height) {
+          console.log('Reached end of canvas, breaking');
+          break;
+        }
+
+        // Create a canvas for this page
+        const pageCanvas = document.createElement('canvas');
+        pageCanvas.width = canvas.width;
+        pageCanvas.height = Math.min(sourceHeight, canvas.height - sourceY);
+        const ctx = pageCanvas.getContext('2d')!;
+
+        // Fill with white background
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, pageCanvas.width, pageCanvas.height);
+
+        // Draw the portion of the original canvas
+        ctx.drawImage(
+          canvas,
+          0, sourceY, canvas.width, pageCanvas.height,
+          0, 0, canvas.width, pageCanvas.height
+        );
+
+        // Convert to image and add to PDF
+        const pageData = pageCanvas.toDataURL('image/jpeg', quality.jpegQuality);
+        const actualPageHeight = Math.min(pdfHeight, (pageCanvas.height * imgWidth) / canvas.width);
+
+        console.log(`Adding page ${pageIndex + 1} with height ${Math.round(actualPageHeight)}`);
+        pdf.addImage(pageData, 'JPEG', 0, 0, imgWidth, actualPageHeight);
+      }
+
+      console.log('PDF generation completed');
+      return pdf.output('blob');
+    }
+
+
   }
 });
