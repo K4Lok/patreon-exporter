@@ -60,12 +60,55 @@ export default defineContentScript({
       return false;
     });
 
+    // Global state for button synchronization
+    let currentExportStatus = {
+      isExporting: false,
+      statusText: 'To PDF',
+      statusColor: '#ff424d'
+    };
+
     // Helper functions for button status updates
     function updateButtonStatus(button: HTMLButtonElement, text: string, color: string) {
       console.log('Updating button status:', text, color);
       button.textContent = text;
       button.style.backgroundColor = color;
       button.style.cursor = button.disabled ? 'not-allowed' : 'pointer';
+    }
+
+    // Centralized function to update all buttons (popup and floating)
+    function updateAllButtonsStatus(text: string, color: string, isExporting: boolean = false) {
+      console.log('Updating all buttons status:', text, color, 'isExporting:', isExporting);
+
+      // Update global state
+      currentExportStatus = {
+        isExporting,
+        statusText: text,
+        statusColor: color
+      };
+
+      // Update floating button if it exists
+      const floatingButton = document.querySelector('#patreon-exporter-button') as HTMLButtonElement;
+      if (floatingButton) {
+        floatingButton.textContent = text;
+        floatingButton.style.backgroundColor = color;
+        floatingButton.disabled = isExporting;
+        floatingButton.style.cursor = isExporting ? 'not-allowed' : 'pointer';
+        floatingButton.style.opacity = isExporting ? '0.7' : '1';
+      }
+
+      // Send message to popup to update its button
+      try {
+        browser.runtime.sendMessage({
+          cmd: 'updatePopupButton',
+          text: text,
+          color: color,
+          isExporting: isExporting
+        }).catch(() => {
+          // Popup might not be open, ignore error
+        });
+      } catch (error) {
+        // Ignore errors if popup is not open
+      }
     }
 
     function resetButton(button: HTMLButtonElement) {
@@ -148,7 +191,7 @@ export default defineContentScript({
 
       // Show initial comment count
       let currentCount = getCurrentCommentCount();
-      updateButtonStatus(statusButton, `Expanding comments... (${currentCount})`, '#f59e0b');
+      updateAllButtonsStatus(`Expanding comments... (${currentCount})`, '#f59e0b', true);
       console.log('Initial comment count:', currentCount);
 
       // Only look for buttons within the comments container
@@ -170,7 +213,7 @@ export default defineContentScript({
             const newCount = getCurrentCommentCount();
             if (newCount > currentCount) {
               currentCount = newCount;
-              updateButtonStatus(statusButton, `Expanding comments... (${currentCount})`, '#f59e0b');
+              updateAllButtonsStatus(`Expanding comments... (${currentCount})`, '#f59e0b', true);
               console.log('Updated comment count:', currentCount);
             }
             await new Promise(resolve => setTimeout(resolve, 200));
@@ -201,7 +244,7 @@ export default defineContentScript({
             const newCount = getCurrentCommentCount();
             if (newCount > currentCount) {
               currentCount = newCount;
-              updateButtonStatus(statusButton, `Expanding comments... (${currentCount})`, '#f59e0b');
+              updateAllButtonsStatus(`Expanding comments... (${currentCount})`, '#f59e0b', true);
               console.log('Updated comment count after replies:', currentCount);
             }
           }
@@ -215,14 +258,14 @@ export default defineContentScript({
       const finalCount = getCurrentCommentCount();
       if (finalCount > currentCount) {
         currentCount = finalCount;
-        updateButtonStatus(statusButton, `Expanding comments... (${currentCount})`, '#f59e0b');
+        updateAllButtonsStatus(`Expanding comments... (${currentCount})`, '#f59e0b', true);
       }
 
       console.log(`Final comment count: ${currentCount}`);
 
       // Show final comment count
       if (currentCount > 0) {
-        updateButtonStatus(statusButton, `Found ${currentCount} comments`, '#f59e0b');
+        updateAllButtonsStatus(`Found ${currentCount} comments`, '#f59e0b', true);
         await new Promise(resolve => setTimeout(resolve, 1000)); // Show this status for a moment
       }
 
@@ -250,12 +293,12 @@ export default defineContentScript({
       // Only expand comments if the setting is enabled
       if (settings.includeComments !== false) {
         console.log('Starting comment expansion...');
-        updateButtonStatus(button, 'Expanding comments...', '#f59e0b');
+        updateAllButtonsStatus('Expanding comments...', '#f59e0b', true);
         commentCount = await loadAllCommentsWithCount(button);
         console.log('Comment expansion completed, count:', commentCount);
       } else {
         console.log('Comments disabled, skipping...');
-        updateButtonStatus(button, 'Processing content...', '#8b5cf6');
+        updateAllButtonsStatus('Processing content...', '#8b5cf6', true);
       }
 
       // Find the main post content
@@ -264,7 +307,7 @@ export default defineContentScript({
         throw new Error('Could not find post content on this page');
       }
 
-      updateButtonStatus(button, 'Processing content...', '#8b5cf6');
+      updateAllButtonsStatus('Processing content...', '#8b5cf6', true);
       await new Promise(resolve => setTimeout(resolve, 800)); // Show this status
 
       // Clone and clean the content
@@ -278,7 +321,7 @@ export default defineContentScript({
       console.log('Generated filename:', filename);
 
       try {
-        updateButtonStatus(button, 'Generating PDF...', '#06b6d4');
+        updateAllButtonsStatus('Generating PDF...', '#06b6d4', true);
         await new Promise(resolve => setTimeout(resolve, 500)); // Show this status
 
         // Generate PDF with progress updates
@@ -360,8 +403,7 @@ export default defineContentScript({
         console.log('Button ID:', button.id);
 
         // Change button state to indicate processing
-        button.disabled = true;
-        updateButtonStatus(button, 'Preparing...', '#cccccc');
+        updateAllButtonsStatus('Preparing...', '#cccccc', true);
 
         try {
           // Get settings from storage
@@ -379,12 +421,12 @@ export default defineContentScript({
           const result = await exportPostWithStatus(exportSettings, button);
 
           // Download based on user preference
-          updateButtonStatus(button, 'Downloading...', '#4f46e5');
+          updateAllButtonsStatus('Downloading...', '#4f46e5', true);
           await downloadFileDirectly(result.blobUrl, result.filename, exportSettings.showDownloadDialog);
 
           // Show success state with stats
           const stats = result.stats;
-          updateButtonStatus(button, `Success! ${stats.pages}p, ${stats.comments}c`, '#10b981');
+          updateAllButtonsStatus(`Success! ${stats.pages}p, ${stats.comments}c`, '#10b981', false);
 
           // Reset button after a delay
           setTimeout(() => {
@@ -395,7 +437,7 @@ export default defineContentScript({
           console.error('Export failed:', error);
 
           // Show error state
-          updateButtonStatus(button, 'Failed!', '#ef4444');
+          updateAllButtonsStatus('Failed!', '#ef4444', false);
 
           // Reset button after a delay
           setTimeout(() => {
@@ -1200,7 +1242,7 @@ export default defineContentScript({
 
         // Update progress on button with a small delay to make it visible
         if (button) {
-          updateButtonStatus(button, `Generating PDF... (${pageIndex + 1}/${totalPages})`, '#06b6d4');
+          updateAllButtonsStatus(`Generating PDF... (${pageIndex + 1}/${totalPages})`, '#06b6d4', true);
           // Add a small delay every few pages to make progress visible
           if (pageIndex % 3 === 0) {
             await new Promise(resolve => setTimeout(resolve, 100));

@@ -12,6 +12,7 @@ function App() {
   const [isExporting, setIsExporting] = useState(false);
   const [status, setStatus] = useState<string>('');
   const [error, setError] = useState<string>('');
+  const [buttonText, setButtonText] = useState<string>('Export to PDF');
   const [isPatreonPage, setIsPatreonPage] = useState(false);
   const [settings, setSettings] = useState<ExportSettings>({
     pageSize: 'letter',
@@ -38,12 +39,31 @@ function App() {
         showDownloadDialog: result.showDownloadDialog !== undefined ? result.showDownloadDialog : false
       });
     });
+
+    // Listen for button status updates from content script
+    const messageListener = (message: any) => {
+      if (message.cmd === 'updatePopupButton') {
+        setButtonText(message.text);
+        setIsExporting(message.isExporting);
+        if (message.isExporting) {
+          setStatus('');
+          setError('');
+        }
+      }
+    };
+
+    browser.runtime.onMessage.addListener(messageListener);
+
+    // Cleanup listener on unmount
+    return () => {
+      browser.runtime.onMessage.removeListener(messageListener);
+    };
   }, []);
 
   const handleExport = async () => {
     setIsExporting(true);
     setError('');
-    setStatus('Preparing export...');
+    setButtonText('Preparing export...');
 
     try {
       // Get current tab
@@ -87,7 +107,7 @@ function App() {
 
           if (downloadResponse && downloadResponse.success) {
             const stats = response.data.stats;
-            setStatus(`Success! ${stats.pages} pages, ${stats.comments} comments`);
+            setButtonText(`Success! ${stats.pages}p, ${stats.comments}c`);
             setTimeout(() => window.close(), 3000);
           } else {
             throw new Error(downloadResponse?.error || 'Download failed');
@@ -104,7 +124,7 @@ function App() {
 
           if (downloadResponse && downloadResponse.success) {
             const stats = response.data.stats;
-            setStatus(`Success! ${stats.pages} pages, ${stats.comments} comments`);
+            setButtonText(`Success! ${stats.pages}p, ${stats.comments}c`);
             setTimeout(() => window.close(), 3000);
           } else {
             throw new Error(downloadResponse?.error || 'Download failed');
@@ -116,7 +136,7 @@ function App() {
     } catch (err) {
       console.error('Export error:', err);
       setError(err instanceof Error ? err.message : 'Export failed');
-      setStatus('');
+      setButtonText('Export to PDF');
     } finally {
       setIsExporting(false);
     }
@@ -198,7 +218,7 @@ function App() {
         onClick={handleExport}
         disabled={isExporting}
       >
-        {isExporting ? status || 'Exporting...' : 'Export to PDF'}
+        {isExporting ? buttonText : 'Export to PDF'}
       </button>
 
       {error && <div className="error">{error}</div>}
