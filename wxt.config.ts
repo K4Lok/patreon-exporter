@@ -2,7 +2,8 @@ import { defineConfig } from 'wxt';
 
 // See https://wxt.dev/api/config.html
 export default defineConfig({
-  modules: ['@wxt-dev/module-react'],
+  modules: ['@wxt-dev/module-react', '@wxt-dev/auto-icons'],
+  // auto-icons: https://github.com/wxt-dev/wxt/blob/HEAD/packages/auto-icons/src/index.ts
   manifest: {
     name: 'Patreon Exporter',
     description: 'Export Patreon posts to clean PDFs for offline reading',
@@ -16,19 +17,14 @@ export default defineConfig({
     ],
     action: { 
       default_title: 'Export to PDF',
-      default_icon: {
-        "16": "icon/16.png",
-        "32": "icon/32.png",
-        "48": "icon/48.png",
-        "128": "icon/128.png"
-      }
     },
-    icons: {
-      "16": "icon/16.png",
-      "32": "icon/32.png",
-      "48": "icon/48.png",
-      "128": "icon/128.png"
-    }
+    // It will set by auto-icons
+    // icons: {
+    //   "16": "icon/16.png",
+    //   "32": "icon/32.png",
+    //   "48": "icon/48.png",
+    //   "128": "icon/128.png"
+    // },
   },
   targetBrowsers: ['chrome', 'edge', 'firefox'],
 });
