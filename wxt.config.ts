@@ -3,6 +3,26 @@ import { defineConfig } from 'wxt';
 // See https://wxt.dev/api/config.html
 export default defineConfig({
   modules: ['@wxt-dev/module-react', '@wxt-dev/auto-icons'],
+  vite: () => ({
+    plugins: [
+      {
+        name: 'remove-pdfobject',
+        transform(code, id) {
+          // Remove PDFObject references from jsPDF to comply with Chrome Web Store policy
+          if (id.includes('jspdf') || id.includes('node_modules/jspdf')) {
+            return code.replace(
+              /["']https:\/\/cdnjs\.cloudflare\.com\/ajax\/libs\/pdfobject\/[^"']*["']/g,
+              '""'
+            ).replace(
+              /integrity\s*=\s*["'][^"']*["']/g,
+              ''
+            );
+          }
+          return null;
+        }
+      }
+    ]
+  }),
   // auto-icons: https://github.com/wxt-dev/wxt/blob/HEAD/packages/auto-icons/src/index.ts
   manifest: {
     name: 'Patreon Exporter',

@@ -29,3 +29,6 @@ web-ext.config.ts
 .env
 .env.local
 .env.submit
+
+# claude
+.claude
