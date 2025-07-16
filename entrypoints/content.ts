@@ -1165,21 +1165,50 @@ export default defineContentScript({
         const canvas = await html2canvas(content, {
           scale: quality.scale,
           useCORS: false,
-          allowTaint: true,
+          allowTaint: false, // Changed to false to prevent tainted canvas issues
           logging: false,
           windowWidth: dimensions.width,
           windowHeight: dimensions.height + 200,
           backgroundColor: '#ffffff',
           removeContainer: false,
           imageTimeout: 15000,
+          ignoreElements: (element) => {
+            // Skip elements that might cause tainted canvas issues
+            if (element.tagName === 'IMG') {
+              const src = element.getAttribute('src') || '';
+              // Skip external images that aren't blob or data URLs
+              if (src.startsWith('http') && !src.startsWith('blob:') && !src.startsWith('data:')) {
+                console.warn('Skipping external image to prevent tainted canvas:', src);
+                return true;
+              }
+            }
+            return false;
+          },
           onclone: (clonedDoc) => {
-            // Final cleanup - remove any remaining problematic elements
-            const problematicElements = clonedDoc.querySelectorAll('video, audio, iframe, embed, object');
+            console.log('Cleaning cloned document for canvas generation...');
+            
+            // Remove all potentially problematic elements
+            const problematicElements = clonedDoc.querySelectorAll('video, audio, iframe, embed, object, svg');
+            console.log(`Removing ${problematicElements.length} problematic elements`);
             problematicElements.forEach(el => el.remove());
 
-            // Also remove any images that still have external URLs (not blob/data)
-            const externalImages = clonedDoc.querySelectorAll('img[src^="http"]:not([src^="blob:"]):not([src^="data:"])');
-            externalImages.forEach(el => el.remove());
+            // More aggressive external image removal
+            const externalImages = clonedDoc.querySelectorAll('img');
+            let removedImages = 0;
+            externalImages.forEach(img => {
+              const src = img.getAttribute('src') || '';
+              // Remove any image with external URL that isn't blob or data
+              if (src.startsWith('http') && !src.startsWith('blob:') && !src.startsWith('data:')) {
+                console.warn('Removing external image from clone:', src);
+                img.remove();
+                removedImages++;
+              }
+            });
+            console.log(`Removed ${removedImages} external images from clone`);
+
+            // Also remove any canvas elements that might be tainted
+            const canvasElements = clonedDoc.querySelectorAll('canvas');
+            canvasElements.forEach(canvas => canvas.remove());
           },
         });
 
@@ -1188,9 +1217,27 @@ export default defineContentScript({
         // Create PDF with intelligent pagination and progress updates
         return await createPDFWithSimplePagination(canvas, quality, button);
       } catch (error) {
-        console.error('PDF generation failed with detailed error:', error);
-        console.error('Error stack:', error instanceof Error ? error.stack : 'No stack trace');
-        throw new Error(`Failed to generate PDF: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        console.error('Canvas-based PDF generation failed:', error);
+        
+        // Check if it's a tainted canvas error or similar issue
+        if (error instanceof Error && (
+          error.message.includes('tainted') || 
+          error.message.includes('CORS') ||
+          error.message.includes('canvas')
+        )) {
+          console.log('Attempting text-based fallback PDF generation...');
+          updateAllButtonsStatus('Creating text-only PDF...', '#f59e0b', true);
+          
+          try {
+            return await createTextFallbackPDF(content, settings);
+          } catch (fallbackError) {
+            console.error('Fallback PDF generation also failed:', fallbackError);
+            throw new Error(`Failed to generate PDF: Canvas export failed due to external images, and text fallback also failed. ${error.message}`);
+          }
+        } else {
+          console.error('Error stack:', error instanceof Error ? error.stack : 'No stack trace');
+          throw new Error(`Failed to generate PDF: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        }
       }
     }
 
@@ -1220,8 +1267,22 @@ export default defineContentScript({
       // If content fits on one page, add it directly
       if (imgHeight <= pdfHeight) {
         console.log('Content fits on one page');
-        const imageData = canvas.toDataURL('image/jpeg', quality.jpegQuality);
-        pdf.addImage(imageData, 'JPEG', 0, 0, imgWidth, imgHeight);
+        try {
+          const imageData = canvas.toDataURL('image/jpeg', quality.jpegQuality);
+          pdf.addImage(imageData, 'JPEG', 0, 0, imgWidth, imgHeight);
+        } catch (error) {
+          if (error instanceof DOMException && error.message.includes('tainted')) {
+            console.warn('Tainted canvas detected, creating fallback page');
+            // Create a simple text fallback page
+            pdf.setFontSize(16);
+            pdf.text('Content could not be exported due to external images', 20, 50);
+            pdf.setFontSize(12);
+            pdf.text('Some images from external sources cannot be included in the PDF.', 20, 80);
+            pdf.text('This is a security restriction to protect user data.', 20, 100);
+          } else {
+            throw error; // Re-throw other errors
+          }
+        }
         return pdf.output('blob');
       }
 
@@ -1282,14 +1343,133 @@ export default defineContentScript({
         );
 
         // Convert to image and add to PDF
-        const pageData = pageCanvas.toDataURL('image/jpeg', quality.jpegQuality);
-        const actualPageHeight = Math.min(pdfHeight, (pageCanvas.height * imgWidth) / canvas.width);
+        try {
+          const pageData = pageCanvas.toDataURL('image/jpeg', quality.jpegQuality);
+          const actualPageHeight = Math.min(pdfHeight, (pageCanvas.height * imgWidth) / canvas.width);
 
-        console.log(`Adding page ${pageIndex + 1} with height ${Math.round(actualPageHeight)}`);
-        pdf.addImage(pageData, 'JPEG', 0, 0, imgWidth, actualPageHeight);
+          console.log(`Adding page ${pageIndex + 1} with height ${Math.round(actualPageHeight)}`);
+          pdf.addImage(pageData, 'JPEG', 0, 0, imgWidth, actualPageHeight);
+        } catch (error) {
+          if (error instanceof DOMException && error.message.includes('tainted')) {
+            console.warn(`Tainted canvas detected on page ${pageIndex + 1}, skipping this page`);
+            // Add a placeholder page with an explanation
+            pdf.setFontSize(14);
+            pdf.text(`Page ${pageIndex + 1} - Content Skipped`, 20, 50);
+            pdf.setFontSize(10);
+            pdf.text('This page contained external images that could not be exported.', 20, 80);
+          } else {
+            console.error(`Error converting page ${pageIndex + 1} to image:`, error);
+            // Continue with next page instead of failing completely
+          }
+        }
       }
 
       console.log('PDF generation completed');
+      return pdf.output('blob');
+    }
+
+    async function createTextFallbackPDF(content: HTMLElement, settings: ExportSettings | undefined): Promise<Blob> {
+      console.log('Creating text-based fallback PDF...');
+      
+      // Create PDF
+      const pdf = new jsPDF({
+        orientation: 'portrait',
+        unit: 'px',
+        format: 'letter'
+      });
+
+      const pageWidth = pdf.internal.pageSize.getWidth();
+      const pageHeight = pdf.internal.pageSize.getHeight();
+      const margin = 40;
+      const contentWidth = pageWidth - (margin * 2);
+      
+      let yPosition = margin + 20;
+      const lineHeight = 16;
+      const maxLinesPerPage = Math.floor((pageHeight - margin * 2) / lineHeight);
+      let currentPage = 1;
+      let linesOnCurrentPage = 0;
+
+      // Add title
+      pdf.setFontSize(18);
+      pdf.setFont('helvetica', 'bold');
+      pdf.text('Patreon Post Export (Text Only)', margin, yPosition);
+      yPosition += lineHeight * 1.5;
+      linesOnCurrentPage += 2;
+
+      // Add explanation
+      pdf.setFontSize(10);
+      pdf.setFont('helvetica', 'normal');
+      const explanation = 'This PDF was generated in text-only mode because some images could not be exported due to security restrictions.';
+      const explanationLines = pdf.splitTextToSize(explanation, contentWidth);
+      pdf.text(explanationLines, margin, yPosition);
+      yPosition += lineHeight * explanationLines.length + 10;
+      linesOnCurrentPage += explanationLines.length + 1;
+
+      // Extract and add text content
+      pdf.setFontSize(12);
+      
+      // Helper function to add new page if needed
+      const checkPageBreak = () => {
+        if (linesOnCurrentPage >= maxLinesPerPage - 2) {
+          pdf.addPage();
+          yPosition = margin + 20;
+          linesOnCurrentPage = 0;
+          currentPage++;
+        }
+      };
+
+      // Extract text from different elements
+      const textElements = content.querySelectorAll('h1, h2, h3, h4, h5, h6, p, div, span');
+      const processedTexts = new Set(); // Avoid duplicates
+
+      for (const element of textElements) {
+        const text = element.textContent?.trim();
+        if (!text || text.length < 10 || processedTexts.has(text)) continue;
+        
+        processedTexts.add(text);
+        
+        // Determine if this is a header
+        const isHeader = ['H1', 'H2', 'H3', 'H4', 'H5', 'H6'].includes(element.tagName);
+        
+        checkPageBreak();
+        
+        if (isHeader) {
+          // Add some space before headers
+          yPosition += lineHeight * 0.5;
+          linesOnCurrentPage += 0.5;
+          checkPageBreak();
+          
+          pdf.setFont('helvetica', 'bold');
+          pdf.setFontSize(14);
+        } else {
+          pdf.setFont('helvetica', 'normal');
+          pdf.setFontSize(11);
+        }
+        
+        // Split long text into multiple lines
+        const lines = pdf.splitTextToSize(text, contentWidth);
+        
+        // Check if we need multiple pages for this text block
+        if (linesOnCurrentPage + lines.length > maxLinesPerPage) {
+          checkPageBreak();
+        }
+        
+        pdf.text(lines, margin, yPosition);
+        yPosition += lineHeight * lines.length + (isHeader ? lineHeight * 0.5 : lineHeight * 0.2);
+        linesOnCurrentPage += lines.length + (isHeader ? 0.5 : 0.2);
+      }
+
+      // Add footer with page numbers
+      const totalPages = currentPage;
+      for (let i = 1; i <= totalPages; i++) {
+        pdf.setPage(i);
+        pdf.setFontSize(8);
+        pdf.setFont('helvetica', 'normal');
+        pdf.text(`Page ${i} of ${totalPages}`, pageWidth - margin - 50, pageHeight - 20);
+        pdf.text('Generated by Patreon Exporter (Text Mode)', margin, pageHeight - 20);
+      }
+
+      console.log(`Text-based PDF created with ${totalPages} pages`);
       return pdf.output('blob');
     }
 
