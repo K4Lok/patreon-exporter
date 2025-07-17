@@ -133,6 +133,77 @@ h1 {
   color: #1a1a1a;
 }
 
+/* Tooltip styling */
+.tooltip-icon {
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  background: #8899a6;
+  color: #ffffff;
+  border-radius: 50%;
+  font-size: 11px;
+  font-weight: 600;
+  text-align: center;
+  line-height: 16px;
+  margin-left: 6px;
+  cursor: help;
+  transition: all 0.2s ease;
+  position: relative;
+}
+
+.tooltip-icon:hover {
+  background: #536471;
+  transform: scale(1.1);
+}
+
+/* Enhanced tooltip using title attribute */
+.tooltip-icon[title] {
+  position: relative;
+}
+
+.tooltip-icon[title]:hover::after {
+  content: attr(title);
+  position: absolute;
+  bottom: 125%;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(0, 0, 0, 0.9);
+  color: white;
+  padding: 8px 12px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: normal;
+  line-height: 1.4;
+  white-space: normal;
+  width: 200px;
+  text-align: left;
+  z-index: 1000;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+  animation: tooltipFadeIn 0.2s ease-in;
+}
+
+.tooltip-icon[title]:hover::before {
+  content: '';
+  position: absolute;
+  bottom: 117%;
+  left: 50%;
+  transform: translateX(-50%);
+  border: 5px solid transparent;
+  border-top-color: rgba(0, 0, 0, 0.9);
+  z-index: 1001;
+}
+
+@keyframes tooltipFadeIn {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+}
+
 .export-button {
   width: 100%;
   padding: 12px 24px;

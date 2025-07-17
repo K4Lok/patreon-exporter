@@ -173,7 +173,10 @@ function App() {
       
       <div className="settings">
         <div className="setting-group">
-          <label htmlFor="imageQuality">Image Quality:</label>
+          <label htmlFor="imageQuality">
+            Image Quality:
+            <span className="tooltip-icon" title="Higher quality produces better images but larger file sizes. Medium quality is recommended for most use cases.">?</span>
+          </label>
           <select
             id="imageQuality"
             value={settings.imageQuality}
@@ -196,6 +199,7 @@ function App() {
               disabled={isExporting}
             />
             Include Comments
+            <span className="tooltip-icon" title="Includes all comments and replies in the PDF. This may significantly increase processing time for posts with many comments.">?</span>
           </label>
         </div>
 
@@ -209,6 +213,7 @@ function App() {
               disabled={isExporting}
             />
             Show Download Dialog
+            <span className="tooltip-icon" title="Shows a save dialog where you can choose the download location and filename">?</span>
           </label>
         </div>
       </div>
@@ -224,7 +229,7 @@ function App() {
       {error && <div className="error">{error}</div>}
 
       <div className="footer">
-        <small>Export Patreon posts with page splitting for better text selection</small>
+        <small>Export Patreon posts as high-quality PDFs with intelligent pagination</small>
       </div>
     </div>
   );

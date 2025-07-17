@@ -39,6 +39,8 @@ export default defineContentScript({
 
         // For popup exports, we only generate the PDF and return the blob URL
         // The popup will handle the download with the correct settings
+        // For popup exports, we only generate the PDF and return the blob URL
+        // The popup will handle the download with the correct settings
         exportPostWithStatus(message.settings, dummyButton)
           .then((result: { blobUrl: string; filename: string }) => {
             sendResponse({ success: true, data: result });
@@ -273,21 +275,81 @@ export default defineContentScript({
     }
 
     async function calculatePDFStats(pdfBlob: Blob, commentCount: number): Promise<{ pages: number; comments: number }> {
-      // For now, we'll estimate pages based on blob size
-      // A more accurate method would require parsing the PDF, but this gives a reasonable estimate
-      const sizeInKB = pdfBlob.size / 1024;
-      const estimatedPages = Math.max(1, Math.ceil(sizeInKB / 50)); // Rough estimate: 50KB per page
+      try {
+        // Add timeout protection for blob size calculation
+        const stats = await Promise.race([
+          new Promise<{ pages: number; comments: number }>((resolve) => {
+            // For now, we'll estimate pages based on blob size
+            // A more accurate method would require parsing the PDF, but this gives a reasonable estimate
+            const sizeInKB = pdfBlob.size / 1024;
+            const estimatedPages = Math.max(1, Math.ceil(sizeInKB / 50)); // Rough estimate: 50KB per page
 
-      console.log(`PDF Stats - Size: ${sizeInKB.toFixed(1)}KB, Estimated Pages: ${estimatedPages}, Comments: ${commentCount}`);
+            console.log(`PDF Stats - Size: ${sizeInKB.toFixed(1)}KB, Estimated Pages: ${estimatedPages}, Comments: ${commentCount}`);
 
-      return {
-        pages: estimatedPages,
-        comments: commentCount
-      };
+            resolve({
+              pages: estimatedPages,
+              comments: commentCount
+            });
+          }),
+          new Promise<{ pages: number; comments: number }>((_, reject) => {
+            setTimeout(() => reject(new Error('PDF stats calculation timeout')), 15000); // 15 second timeout (increased from 5s)
+          })
+        ]);
+
+        return stats;
+      } catch (error) {
+        console.error('Error calculating PDF stats:', error);
+        // Return fallback stats
+        return {
+          pages: 1,
+          comments: commentCount
+        };
+      }
     }
 
     async function exportPostWithStatus(settings: ExportSettings, button: HTMLButtonElement): Promise<{ blobUrl: string; filename: string; stats: { pages: number; comments: number } }> {
       console.log('exportPostWithStatus called with button:', button.id);
+
+      // Add overall timeout protection for the entire export process
+      let timeoutId: ReturnType<typeof setTimeout> | null = null;
+      let isCompleted = false;
+
+      try {
+        const result = await Promise.race([
+          exportPostWithStatusInternal(settings, button).then(result => {
+            isCompleted = true;
+            if (timeoutId) clearTimeout(timeoutId);
+            console.log('Export process completed successfully');
+            return result;
+          }),
+          new Promise<never>((_, reject) => {
+            timeoutId = setTimeout(() => {
+              if (!isCompleted) {
+                console.error('Export process timeout - operation took longer than 15 minutes');
+                updateAllButtonsStatus('Timeout!', '#ef4444', false);
+                setTimeout(() => {
+                  updateAllButtonsStatus('To PDF', '#ff424d', false);
+                }, 3000); // Reset button after 3 seconds
+                reject(new Error('Export timeout: The operation took longer than expected. This may be due to very large content or browser memory limitations.'));
+              }
+            }, 900000); // 15 minute timeout (increased from 5 minutes)
+          })
+        ]);
+
+        return result;
+      } catch (error) {
+        console.error('Export process failed:', error);
+        if (timeoutId) clearTimeout(timeoutId);
+        // Ensure button is reset on any error
+        setTimeout(() => {
+          updateAllButtonsStatus('To PDF', '#ff424d', false);
+        }, 3000);
+        throw error;
+      }
+    }
+
+    async function exportPostWithStatusInternal(settings: ExportSettings, button: HTMLButtonElement): Promise<{ blobUrl: string; filename: string; stats: { pages: number; comments: number } }> {
+      console.log('Starting internal export process');
       let commentCount = 0;
 
       // Only expand comments if the setting is enabled
@@ -327,11 +389,33 @@ export default defineContentScript({
         // Generate PDF with progress updates
         const pdfBlob = await generatePDFWithProgress(cleanedContent, settings, button);
 
-        const blobUrl = URL.createObjectURL(pdfBlob);
+        // Update status after PDF generation
+        updateAllButtonsStatus('Creating download link...', '#06b6d4', true);
+        await new Promise(resolve => setTimeout(resolve, 100)); // Brief pause to show status
+
+        // Create blob URL with timeout protection
+        const blobUrl = await Promise.race([
+          new Promise<string>((resolve) => {
+            try {
+              const url = URL.createObjectURL(pdfBlob);
+              console.log('Blob URL created successfully');
+              resolve(url);
+            } catch (error) {
+              throw new Error(`Failed to create blob URL: ${error instanceof Error ? error.message : 'Unknown error'}`);
+            }
+          }),
+          new Promise<string>((_, reject) => {
+            setTimeout(() => reject(new Error('Blob URL creation timeout')), 30000); // 30 second timeout (increased from 10s)
+          })
+        ]);
 
         // Calculate PDF stats
+        updateAllButtonsStatus('Calculating statistics...', '#06b6d4', true);
+        console.log('About to calculate PDF stats...');
         const stats = await calculatePDFStats(pdfBlob, commentCount);
+        console.log('PDF stats calculated successfully:', stats);
 
+        console.log('Export completed successfully, returning result');
         return { blobUrl, filename, stats };
       } catch (error) {
         console.error('PDF generation failed:', error);
@@ -893,52 +977,90 @@ export default defineContentScript({
       }
     }
 
+    // Track failed images to prevent infinite retries
+    const failedImageUrls = new Set<string>();
+
     async function replaceImagesWithPlaceholders(container: HTMLElement): Promise<void> {
-      // Debug: log the container structure
-      
       // Look for images
       const allImgTags = container.getElementsByTagName('img');
-      
+
       if (allImgTags.length === 0) {
+        console.log('No images found in container');
         return;
       }
 
       // Convert HTMLCollection to Array for easier processing
       const imageArray = Array.from(allImgTags);
-      
-      // Process images in parallel
-      const imagePromises = imageArray.map((img, index) => 
-        processImageWithFetch(img as HTMLImageElement, index + 1)
-      );
-      
-      await Promise.allSettled(imagePromises);
 
-      // Add a small delay to ensure all images are fully loaded and rendered
-      await new Promise(resolve => setTimeout(resolve, 1000));
+      // Log image analysis
+      console.log(`Found ${imageArray.length} images to process:`);
+      imageArray.forEach((img, index) => {
+        const src = img.src || '';
+        const dataMediaId = img.getAttribute('data-media-id') || '';
+        const alt = img.getAttribute('alt') || '';
+        console.log(`  Image ${index + 1}: src="${src.substring(0, 50)}${src.length > 50 ? '...' : ''}", data-media-id="${dataMediaId}", alt="${alt}"`);
+      });
+
+      // Process images in parallel with limited concurrency to prevent overwhelming the browser
+      const batchSize = 5; // Process 5 images at a time
+      for (let i = 0; i < imageArray.length; i += batchSize) {
+        const batch = imageArray.slice(i, i + batchSize);
+        const batchPromises = batch.map((img, batchIndex) =>
+          processImageWithFetch(img as HTMLImageElement, i + batchIndex + 1)
+        );
+
+        await Promise.allSettled(batchPromises);
+
+        // Small delay between batches to prevent overwhelming the browser
+        if (i + batchSize < imageArray.length) {
+          await new Promise(resolve => setTimeout(resolve, 200));
+        }
+      }
+
+      console.log(`Image processing completed. Failed URLs: ${failedImageUrls.size}`);
     }
 
     async function processImageWithFetch(img: HTMLImageElement, index: number): Promise<void> {
       const originalSrc = img.src;
-      
+
       // Skip if already a data URL or blob URL
       if (originalSrc.startsWith('data:') || originalSrc.startsWith('blob:')) {
         return;
       }
 
-      // Skip if no src
+      // Handle images with empty or missing src - create placeholder immediately
       if (!originalSrc || originalSrc.trim() === '') {
+        console.log(`Found image with empty src, creating placeholder for image ${index}`);
+        // Check if image has data attributes that might indicate it's a media element
+        const dataMediaId = img.getAttribute('data-media-id');
+        const altText = img.getAttribute('alt') || '';
+        const placeholderText = dataMediaId ? `Media ID: ${dataMediaId}` : 'Empty image source';
+        createImagePlaceholder(img, placeholderText, index);
+        return;
+      }
+
+      // Skip if this URL has already failed
+      if (failedImageUrls.has(originalSrc)) {
+        console.log(`Skipping previously failed image ${index}: ${originalSrc.substring(0, 50)}...`);
+        createImagePlaceholder(img, originalSrc, index);
         return;
       }
 
       try {
-        
+        // Add timeout to fetch request to prevent hanging
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
+
         // Fetch the image using the extension's permissions
         const response = await fetch(originalSrc, {
           method: 'GET',
           mode: 'cors', // Try CORS first since we have host permissions
           credentials: 'omit',
-          cache: 'force-cache' // Use cache if available for performance
+          cache: 'force-cache', // Use cache if available for performance
+          signal: controller.signal
         });
+
+        clearTimeout(timeoutId);
 
         if (response.ok) {
           const blob = await response.blob();
@@ -976,7 +1098,11 @@ export default defineContentScript({
           throw new Error(`HTTP ${response.status}: ${response.statusText}`);
         }
       } catch (error) {
-        
+        // Track this URL as failed to prevent future retries
+        failedImageUrls.add(originalSrc);
+
+        console.log(`Failed to fetch image ${index}: ${error instanceof Error ? error.message : 'Unknown error'}`);
+
         // Create placeholder as fallback
         createImagePlaceholder(img, originalSrc, index);
       }
@@ -985,12 +1111,30 @@ export default defineContentScript({
     function createImagePlaceholder(img: HTMLImageElement, originalSrc: string, index: number): void {
       // Create a properly sized placeholder div
       const placeholder = document.createElement('div');
-      
+
       // Get dimensions from the original image or use defaults
       const width = img.offsetWidth || img.naturalWidth || 400;
       const height = img.offsetHeight || img.naturalHeight || 200;
-      
-      
+
+      // Check for additional metadata
+      const dataMediaId = img.getAttribute('data-media-id');
+      const altText = img.getAttribute('alt') || '';
+
+      // Determine the reason for placeholder
+      let reason = 'Could not load image';
+      let details = originalSrc;
+
+      if (!originalSrc || originalSrc.trim() === '') {
+        reason = 'Empty image source';
+        if (dataMediaId) {
+          details = `Media ID: ${dataMediaId}`;
+        } else if (altText) {
+          details = `Alt text: ${altText}`;
+        } else {
+          details = 'No source or metadata found';
+        }
+      }
+
       placeholder.style.cssText = `
         width: ${Math.min(width, 600)}px;
         height: ${Math.max(Math.min(height, 400), 120)}px;
@@ -1008,20 +1152,21 @@ export default defineContentScript({
         position: relative;
         overflow: hidden;
       `;
-      
+
       placeholder.innerHTML = `
         <div style="font-size: 48px; margin-bottom: 8px;">🖼️</div>
         <div style="font-size: 16px; font-weight: 600; margin-bottom: 4px;">Image ${index}</div>
-        <div style="font-size: 14px; opacity: 0.8;">Could not load image</div>
+        <div style="font-size: 14px; opacity: 0.8;">${reason}</div>
         <div style="font-size: 12px; opacity: 0.6; margin-top: 8px; max-width: 90%; word-break: break-all;">
-          ${originalSrc.length > 50 ? originalSrc.substring(0, 50) + '...' : originalSrc}
+          ${details.length > 50 ? details.substring(0, 50) + '...' : details}
         </div>
       `;
-      
+
       // Replace the image with the placeholder
       if (img.parentNode) {
         img.parentNode.replaceChild(placeholder, img);
       } else {
+        console.warn('Could not replace image - no parent node found');
       }
     }
 
@@ -1107,14 +1252,16 @@ export default defineContentScript({
       const marginRight = 50;
       const contentWidth = dimensions.width - marginLeft - marginRight;
 
-      // Image quality settings
+      // Conservative quality settings to prevent memory issues
+      // Research shows scale > 1 often causes blank pages with large content
       const qualityMap: Record<'high' | 'medium' | 'low', { scale: number; jpegQuality: number }> = {
-        high: { scale: 2, jpegQuality: 1.00 },
-        medium: { scale: 1.5, jpegQuality: 0.85 },
-        low: { scale: 1, jpegQuality: 0.75 }
+        high: { scale: 1.5, jpegQuality: 1.00 },    // Reduced from 2 to 1.5
+        medium: { scale: 1.3, jpegQuality: 0.90 },  // Reduced from 1.5 to 1.3
+        low: { scale: 1, jpegQuality: 0.75 }      // Keep at 1
       };
 
       const quality = qualityMap[imageQuality];
+      console.log(`Using conservative scale: ${quality.scale} for quality: ${imageQuality}`);
 
       // Update content styling for better PDF layout
       content.style.cssText += `
@@ -1161,14 +1308,26 @@ export default defineContentScript({
       try {
         console.log('Starting improved PDF generation...');
 
-        // Convert HTML to canvas first - single canvas approach
+        // Check content height to determine if we need chunking
+        const contentHeight = content.scrollHeight;
+        const estimatedCanvasHeight = contentHeight * quality.scale;
+        const maxSafeCanvasHeight = 32767; // Common browser limit
+
+        console.log(`Content height: ${contentHeight}px, Estimated canvas height: ${estimatedCanvasHeight}px`);
+
+        if (estimatedCanvasHeight > maxSafeCanvasHeight) {
+          console.log('Content too large for single canvas, using chunked approach');
+          return await generatePDFWithChunking(content, settings, button);
+        }
+
+        // Convert HTML to canvas first - single canvas approach with conservative settings
         const canvas = await html2canvas(content, {
           scale: quality.scale,
           useCORS: false,
-          allowTaint: false, // Changed to false to prevent tainted canvas issues
+          allowTaint: false,
           logging: false,
           windowWidth: dimensions.width,
-          windowHeight: dimensions.height + 200,
+          windowHeight: Math.min(dimensions.height + 200, maxSafeCanvasHeight),
           backgroundColor: '#ffffff',
           removeContainer: false,
           imageTimeout: 15000,
@@ -1176,12 +1335,26 @@ export default defineContentScript({
             // Skip elements that might cause tainted canvas issues
             if (element.tagName === 'IMG') {
               const src = element.getAttribute('src') || '';
+
+              // Skip images with empty src
+              if (!src || src.trim() === '') {
+                console.warn('Skipping image with empty src to prevent canvas issues');
+                return true;
+              }
+
               // Skip external images that aren't blob or data URLs
               if (src.startsWith('http') && !src.startsWith('blob:') && !src.startsWith('data:')) {
-                console.warn('Skipping external image to prevent tainted canvas:', src);
+                console.log('Skipping external image to prevent tainted canvas:', src);
                 return true;
               }
             }
+
+            // Skip potentially problematic elements that can cause memory issues
+            if (['VIDEO', 'AUDIO', 'IFRAME', 'EMBED', 'OBJECT'].includes(element.tagName)) {
+              console.log('Skipping potentially problematic element:', element.tagName);
+              return true;
+            }
+
             return false;
           },
           onclone: (clonedDoc) => {
@@ -1192,11 +1365,20 @@ export default defineContentScript({
             console.log(`Removing ${problematicElements.length} problematic elements`);
             problematicElements.forEach(el => el.remove());
 
-            // More aggressive external image removal
-            const externalImages = clonedDoc.querySelectorAll('img');
+            // More aggressive problematic image removal
+            const allImages = clonedDoc.querySelectorAll('img');
             let removedImages = 0;
-            externalImages.forEach(img => {
+            allImages.forEach(img => {
               const src = img.getAttribute('src') || '';
+
+              // Remove images with empty src
+              if (!src || src.trim() === '') {
+                console.warn('Removing image with empty src from clone');
+                img.remove();
+                removedImages++;
+                return;
+              }
+
               // Remove any image with external URL that isn't blob or data
               if (src.startsWith('http') && !src.startsWith('blob:') && !src.startsWith('data:')) {
                 console.warn('Removing external image from clone:', src);
@@ -1204,7 +1386,7 @@ export default defineContentScript({
                 removedImages++;
               }
             });
-            console.log(`Removed ${removedImages} external images from clone`);
+            console.log(`Removed ${removedImages} problematic images from clone`);
 
             // Also remove any canvas elements that might be tainted
             const canvasElements = clonedDoc.querySelectorAll('canvas');
@@ -1213,6 +1395,11 @@ export default defineContentScript({
         });
 
         console.log('Canvas created successfully, size:', canvas.width, 'x', canvas.height);
+
+        // Validate canvas before proceeding
+        if (!isCanvasValid(canvas)) {
+          throw new Error('Generated canvas is invalid or corrupted');
+        }
 
         // Create PDF with intelligent pagination and progress updates
         return await createPDFWithSimplePagination(canvas, quality, button);
@@ -1238,6 +1425,189 @@ export default defineContentScript({
           console.error('Error stack:', error instanceof Error ? error.stack : 'No stack trace');
           throw new Error(`Failed to generate PDF: ${error instanceof Error ? error.message : 'Unknown error'}`);
         }
+      }
+    }
+
+    function isCanvasValid(canvas: HTMLCanvasElement): boolean {
+      try {
+        // Check basic canvas properties
+        if (!canvas || canvas.width === 0 || canvas.height === 0) {
+          console.error('Canvas has invalid dimensions:', canvas.width, 'x', canvas.height);
+          return false;
+        }
+
+        // Check if canvas is too large (common browser limits)
+        const maxDimension = 32767;
+        if (canvas.width > maxDimension || canvas.height > maxDimension) {
+          console.error('Canvas exceeds maximum dimensions:', canvas.width, 'x', canvas.height);
+          return false;
+        }
+
+        // Try to get image data to check if canvas is tainted or corrupted
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          console.error('Cannot get 2D context from canvas');
+          return false;
+        }
+
+        // Test a small area to see if we can read pixel data
+        try {
+          ctx.getImageData(0, 0, 1, 1);
+        } catch (error) {
+          console.error('Canvas is tainted or corrupted:', error);
+          return false;
+        }
+
+        // Try to convert to data URL to ensure it's not corrupted
+        try {
+          const dataUrl = canvas.toDataURL('image/jpeg', 0.1);
+          if (!dataUrl || dataUrl === 'data:,') {
+            console.error('Canvas produces empty data URL');
+            return false;
+          }
+        } catch (error) {
+          console.error('Cannot convert canvas to data URL:', error);
+          return false;
+        }
+
+        return true;
+      } catch (error) {
+        console.error('Error validating canvas:', error);
+        return false;
+      }
+    }
+
+    async function generatePDFWithChunking(content: HTMLElement, settings: ExportSettings | undefined, button: HTMLButtonElement): Promise<Blob> {
+      console.log('Using chunked PDF generation for large content...');
+
+      // Create PDF
+      const pdf = new jsPDF({
+        orientation: 'portrait',
+        unit: 'px',
+        format: 'letter'
+      });
+
+      const pdfWidth = pdf.internal.pageSize.getWidth();
+      const pdfHeight = pdf.internal.pageSize.getHeight();
+
+      // Conservative settings for chunking
+      const chunkHeight = Math.floor(pdfHeight * 2); // 2 pages worth of content per chunk
+      const contentHeight = content.scrollHeight;
+      const totalChunks = Math.ceil(contentHeight / chunkHeight);
+
+      console.log(`Chunking content: ${contentHeight}px into ${totalChunks} chunks of ${chunkHeight}px each`);
+
+      let isFirstPage = true;
+
+      for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex++) {
+        if (button) {
+          updateAllButtonsStatus(`Processing chunk ${chunkIndex + 1}/${totalChunks}...`, '#06b6d4', true);
+        }
+
+        // Create a temporary container for this chunk
+        const chunkContainer = document.createElement('div');
+        chunkContainer.style.cssText = content.style.cssText;
+        chunkContainer.style.position = 'fixed';
+        chunkContainer.style.left = '-9999px';
+        chunkContainer.style.top = '0';
+        chunkContainer.style.height = `${chunkHeight}px`;
+        chunkContainer.style.overflow = 'hidden';
+
+        // Clone and position content for this chunk
+        const clonedContent = content.cloneNode(true) as HTMLElement;
+        clonedContent.style.marginTop = `-${chunkIndex * chunkHeight}px`;
+        chunkContainer.appendChild(clonedContent);
+        document.body.appendChild(chunkContainer);
+
+        try {
+          // Generate canvas for this chunk with conservative settings
+          const chunkCanvas = await html2canvas(chunkContainer, {
+            scale: 1, // Always use scale 1 for chunks
+            useCORS: false,
+            allowTaint: false,
+            logging: false,
+            windowWidth: pdfWidth,
+            windowHeight: chunkHeight,
+            backgroundColor: '#ffffff',
+            removeContainer: false,
+            imageTimeout: 10000,
+            ignoreElements: (element) => {
+              if (element.tagName === 'IMG') {
+                const src = element.getAttribute('src') || '';
+                if (!src || src.trim() === '' || (src.startsWith('http') && !src.startsWith('blob:') && !src.startsWith('data:'))) {
+                  return true;
+                }
+              }
+              return false;
+            }
+          });
+
+          if (!isFirstPage) {
+            pdf.addPage();
+          }
+          isFirstPage = false;
+
+          // Add chunk to PDF
+          const imgData = chunkCanvas.toDataURL('image/jpeg', 0.85);
+          const imgWidth = pdfWidth;
+          const imgHeight = (chunkCanvas.height * imgWidth) / chunkCanvas.width;
+
+          pdf.addImage(imgData, 'JPEG', 0, 0, imgWidth, Math.min(imgHeight, pdfHeight));
+
+        } catch (error) {
+          console.error(`Error processing chunk ${chunkIndex + 1}:`, error);
+          // Add error page
+          if (!isFirstPage) {
+            pdf.addPage();
+          }
+          isFirstPage = false;
+
+          pdf.setFontSize(14);
+          pdf.text(`Error processing chunk ${chunkIndex + 1}`, 20, 50);
+          pdf.setFontSize(10);
+          pdf.text('This section could not be rendered due to technical limitations.', 20, 80);
+        } finally {
+          // Clean up
+          document.body.removeChild(chunkContainer);
+        }
+
+        // Force garbage collection and memory cleanup between chunks
+        if (typeof window !== 'undefined' && 'gc' in window) {
+          try {
+            (window as any).gc();
+          } catch (e) {
+            // Ignore if gc is not available
+          }
+        }
+
+        // Small delay between chunks to prevent memory issues
+        await new Promise(resolve => setTimeout(resolve, 200));
+      }
+
+      console.log('Chunked PDF generation completed');
+
+      // Update status before final blob generation
+      if (button) {
+        updateAllButtonsStatus('Finalizing PDF...', '#06b6d4', true);
+      }
+
+      try {
+        // Generate final blob with timeout protection
+        const blob = await Promise.race([
+          new Promise<Blob>((resolve) => {
+            const result = pdf.output('blob');
+            resolve(result);
+          }),
+          new Promise<Blob>((_, reject) => {
+            setTimeout(() => reject(new Error('PDF blob generation timeout')), 120000); // 2 minute timeout (increased from 30s)
+          })
+        ]);
+
+        console.log('PDF blob generated successfully, size:', blob.size);
+        return blob;
+      } catch (error) {
+        console.error('Error generating PDF blob:', error);
+        throw new Error(`Failed to generate final PDF: ${error instanceof Error ? error.message : 'Unknown error'}`);
       }
     }
 
