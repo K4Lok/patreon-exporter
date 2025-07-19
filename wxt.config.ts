@@ -27,7 +27,7 @@ export default defineConfig({
   manifest: {
     name: 'Patreon Exporter',
     description: 'Export Patreon posts to clean PDFs for offline reading',
-    version: '0.1.0',
+    version: '0.2.0',
     permissions: ['activeTab', 'downloads', 'storage'],
     host_permissions: [
       'https://www.patreon.com/*',
