@@ -1,0 +1,9 @@
+User-agent: *
+Allow: /
+
+# Sitemap location
+Sitemap: https://K4Lok.github.io/patreon-exporter/sitemap.xml
+
+# Allow indexing of main pages
+Allow: /index.html
+Allow: /privacy-policy.html
